@@ -243,6 +243,10 @@ uptr internal_close(fd_t fd) {
   return internal_syscall(SYSCALL(close), fd);
 }
 
+uptr internal_close_range(fd_t fd, fd_t max_fd, int flags) {
+  return internal_syscall(SYSCALL(close_range), fd, max_fd, flags);
+}
+
 uptr internal_open(const char *filename, int flags) {
 #    if SANITIZER_LINUX
   return internal_syscall(SYSCALL(openat), AT_FDCWD, (uptr)filename, flags);

@@ -29,6 +29,7 @@ namespace __sanitizer {
 uptr internal_open(const char *filename, int flags);
 uptr internal_open(const char *filename, int flags, u32 mode);
 uptr internal_close(fd_t fd);
+uptr internal_close_range(fd_t fd, fd_t max_fd, int flags);
 
 uptr internal_read(fd_t fd, void *buf, uptr count);
 uptr internal_write(fd_t fd, const void *buf, uptr count);
