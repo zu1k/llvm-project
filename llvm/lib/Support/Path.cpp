@@ -13,6 +13,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Config/config.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/Endian.h"
@@ -262,7 +263,7 @@ const_iterator &const_iterator::operator++() {
     // Root dir.
     if (was_net ||
         // c:/
-        (is_style_windows(S) && Component.endswith(":"))) {
+        (is_style_windows(S) && Component.ends_with(":"))) {
       Component = Path.substr(Position, 1);
       return *this;
     }
@@ -351,7 +352,7 @@ StringRef root_path(StringRef path, Style style) {
   if (b != e) {
     bool has_net =
         b->size() > 2 && is_separator((*b)[0], style) && (*b)[1] == (*b)[0];
-    bool has_drive = is_style_windows(style) && b->endswith(":");
+    bool has_drive = is_style_windows(style) && b->ends_with(":");
 
     if (has_net || has_drive) {
       if ((++pos != e) && is_separator((*pos)[0], style)) {
@@ -376,7 +377,7 @@ StringRef root_name(StringRef path, Style style) {
   if (b != e) {
     bool has_net =
         b->size() > 2 && is_separator((*b)[0], style) && (*b)[1] == (*b)[0];
-    bool has_drive = is_style_windows(style) && b->endswith(":");
+    bool has_drive = is_style_windows(style) && b->ends_with(":");
 
     if (has_net || has_drive) {
       // just {C:,//net}, return the first component.
@@ -393,7 +394,7 @@ StringRef root_directory(StringRef path, Style style) {
   if (b != e) {
     bool has_net =
         b->size() > 2 && is_separator((*b)[0], style) && (*b)[1] == (*b)[0];
-    bool has_drive = is_style_windows(style) && b->endswith(":");
+    bool has_drive = is_style_windows(style) && b->ends_with(":");
 
     if ((has_net || has_drive) &&
         // {C:,//net}, skip to the next component.
@@ -513,7 +514,7 @@ static bool starts_with(StringRef Path, StringRef Prefix,
     }
     return true;
   }
-  return Path.startswith(Prefix);
+  return Path.starts_with(Prefix);
 }
 
 bool replace_path_prefix(SmallVectorImpl<char> &Path, StringRef OldPrefix,

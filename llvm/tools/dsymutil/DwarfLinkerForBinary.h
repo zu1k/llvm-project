@@ -13,6 +13,7 @@
 #include "DebugMap.h"
 #include "LinkUtils.h"
 #include "MachOUtils.h"
+#include "RelocationMap.h"
 #include "llvm/DWARFLinker/DWARFLinker.h"
 #include "llvm/DWARFLinker/DWARFLinkerCompileUnit.h"
 #include "llvm/DWARFLinker/DWARFLinkerDeclContext.h"
@@ -21,9 +22,47 @@
 #include "llvm/Remarks/RemarkFormat.h"
 #include "llvm/Remarks/RemarkLinker.h"
 #include <mutex>
+#include <optional>
 
 namespace llvm {
 namespace dsymutil {
+
+/// DwarfLinkerForBinaryRelocationMap contains the logic to handle the
+/// relocations and to store them inside an associated RelocationMap.
+class DwarfLinkerForBinaryRelocationMap {
+public:
+  void init(DWARFContext &Context);
+
+  bool isInitialized() {
+    return StoredValidDebugInfoRelocsMap.getMemorySize() != 0;
+  }
+
+  void addValidRelocs(RelocationMap &RM);
+
+  void updateAndSaveValidRelocs(bool IsDWARF5,
+                                std::vector<ValidReloc> &InRelocs,
+                                uint64_t UnitOffset, int64_t LinkedOffset);
+
+  void updateRelocationsWithUnitOffset(uint64_t OriginalUnitOffset,
+                                       uint64_t OutputUnitOffset);
+
+  /// Map compilation unit offset to the valid relocations to store
+  /// @{
+  DenseMap<uint64_t, std::vector<ValidReloc>> StoredValidDebugInfoRelocsMap;
+  DenseMap<uint64_t, std::vector<ValidReloc>> StoredValidDebugAddrRelocsMap;
+  /// @}
+
+  DwarfLinkerForBinaryRelocationMap() = default;
+};
+
+template <typename OutDwarfFile> struct ObjectWithRelocMap {
+  ObjectWithRelocMap(
+      std::unique_ptr<OutDwarfFile> Object,
+      std::shared_ptr<DwarfLinkerForBinaryRelocationMap> OutRelocs)
+      : Object(std::move(Object)), OutRelocs(OutRelocs) {}
+  std::unique_ptr<OutDwarfFile> Object;
+  std::shared_ptr<DwarfLinkerForBinaryRelocationMap> OutRelocs;
+};
 
 /// The core of the Dsymutil Dwarf linking logic.
 ///
@@ -67,34 +106,23 @@ private:
   /// Keeps track of relocations.
   template <typename AddressesMapBase>
   class AddressManager : public AddressesMapBase {
-    struct ValidReloc {
-      uint64_t Offset;
-      uint32_t Size;
-      uint64_t Addend;
-      const DebugMapObject::DebugMapEntry *Mapping;
-
-      ValidReloc(uint64_t Offset, uint32_t Size, uint64_t Addend,
-                 const DebugMapObject::DebugMapEntry *Mapping)
-          : Offset(Offset), Size(Size), Addend(Addend), Mapping(Mapping) {}
-
-      bool operator<(const ValidReloc &RHS) const {
-        return Offset < RHS.Offset;
-      }
-      bool operator<(uint64_t RHS) const { return Offset < RHS; }
-    };
 
     const DwarfLinkerForBinary &Linker;
 
     /// The valid relocations for the current DebugMapObject.
-    /// This vector is sorted by relocation offset.
+    /// These vectors are sorted by relocation offset.
     /// {
     std::vector<ValidReloc> ValidDebugInfoRelocs;
     std::vector<ValidReloc> ValidDebugAddrRelocs;
     /// }
 
-    RangesTy AddressRanges;
-
     StringRef SrcFileName;
+
+    uint8_t DebugMapObjectType;
+
+    std::shared_ptr<DwarfLinkerForBinaryRelocationMap> DwarfLinkerRelocMap;
+
+    std::optional<std::string> LibInstallName;
 
     /// Returns list of valid relocations from \p Relocs,
     /// between \p StartOffset and \p NextOffset.
@@ -117,33 +145,28 @@ private:
 
   public:
     AddressManager(DwarfLinkerForBinary &Linker, const object::ObjectFile &Obj,
-                   const DebugMapObject &DMO)
-        : Linker(Linker), SrcFileName(DMO.getObjectFilename()) {
-      findValidRelocsInDebugSections(Obj, DMO);
-
-      // Iterate over the debug map entries and put all the ones that are
-      // functions (because they have a size) into the Ranges map. This map is
-      // very similar to the FunctionRanges that are stored in each unit, with 2
-      // notable differences:
-      //
-      //  1. Obviously this one is global, while the other ones are per-unit.
-      //
-      //  2. This one contains not only the functions described in the DIE
-      //     tree, but also the ones that are only in the debug map.
-      //
-      // The latter information is required to reproduce dsymutil's logic while
-      // linking line tables. The cases where this information matters look like
-      // bugs that need to be investigated, but for now we need to reproduce
-      // dsymutil's behavior.
-      // FIXME: Once we understood exactly if that information is needed,
-      // maybe totally remove this (or try to use it to do a real
-      // -gline-tables-only on Darwin.
-      for (const auto &Entry : DMO.symbols()) {
-        const auto &Mapping = Entry.getValue();
-        if (Mapping.Size && Mapping.ObjectAddress)
-          AddressRanges.insert(
-              {*Mapping.ObjectAddress, *Mapping.ObjectAddress + Mapping.Size},
-              int64_t(Mapping.BinaryAddress) - *Mapping.ObjectAddress);
+                   const DebugMapObject &DMO,
+                   std::shared_ptr<DwarfLinkerForBinaryRelocationMap> DLBRM)
+        : Linker(Linker), SrcFileName(DMO.getObjectFilename()),
+          DebugMapObjectType(MachO::N_OSO), DwarfLinkerRelocMap(DLBRM) {
+      if (DMO.getRelocationMap().has_value()) {
+        DebugMapObjectType = MachO::N_LIB;
+        LibInstallName.emplace(DMO.getInstallName().value());
+        const RelocationMap &RM = DMO.getRelocationMap().value();
+        for (const auto &Reloc : RM.relocations()) {
+          const auto *DebugMapEntry = DMO.lookupSymbol(Reloc.SymbolName);
+          if (!DebugMapEntry)
+            continue;
+          std::optional<uint64_t> ObjAddress;
+          ObjAddress.emplace(DebugMapEntry->getValue().ObjectAddress.value());
+          ValidDebugInfoRelocs.emplace_back(
+              Reloc.Offset, Reloc.Size, Reloc.Addend, Reloc.SymbolName,
+              SymbolMapping(ObjAddress, DebugMapEntry->getValue().BinaryAddress,
+                            DebugMapEntry->getValue().Size));
+          // FIXME: Support relocations debug_addr.
+        }
+      } else {
+        findValidRelocsInDebugSections(Obj, DMO);
       }
     }
     ~AddressManager() override { clear(); }
@@ -185,13 +208,21 @@ private:
     std::optional<int64_t>
     getSubprogramRelocAdjustment(const DWARFDie &DIE) override;
 
+    std::optional<StringRef> getLibraryInstallName() override;
+
     bool applyValidRelocs(MutableArrayRef<char> Data, uint64_t BaseOffset,
                           bool IsLittleEndian) override;
 
-    RangesTy &getValidAddressRanges() override { return AddressRanges; }
+    bool needToSaveValidRelocs() override { return true; }
+
+    void updateAndSaveValidRelocs(bool IsDWARF5, uint64_t OriginalUnitOffset,
+                                  int64_t LinkedOffset, uint64_t StartOffset,
+                                  uint64_t EndOffset) override;
+
+    void updateRelocationsWithUnitOffset(uint64_t OriginalUnitOffset,
+                                         uint64_t OutputUnitOffset) override;
 
     void clear() override {
-      AddressRanges.clear();
       ValidDebugInfoRelocs.clear();
       ValidDebugAddrRelocs.clear();
     }
@@ -210,11 +241,11 @@ private:
   /// Attempt to load a debug object from disk.
   ErrorOr<const object::ObjectFile &> loadObject(const DebugMapObject &Obj,
                                                  const Triple &triple);
-
   template <typename OutDWARFFile, typename AddressesMap>
-  ErrorOr<std::unique_ptr<OutDWARFFile>> loadObject(const DebugMapObject &Obj,
-                                                    const DebugMap &DebugMap,
-                                                    remarks::RemarkLinker &RL);
+  ErrorOr<std::unique_ptr<OutDWARFFile>>
+  loadObject(const DebugMapObject &Obj, const DebugMap &DebugMap,
+             remarks::RemarkLinker &RL,
+             std::shared_ptr<DwarfLinkerForBinaryRelocationMap> DLBRM);
 
   void collectRelocationsToApplyToSwiftReflectionSections(
       const object::SectionRef &Section, StringRef &Contents,
@@ -236,6 +267,11 @@ private:
   template <typename Linker, typename OutDwarfFile, typename AddressMapBase>
   bool linkImpl(const DebugMap &Map,
                 typename Linker::OutputFileType ObjectType);
+
+  template <typename OutDwarfFile, typename AddressMap>
+  Error emitRelocations(
+      const DebugMap &DM,
+      std::vector<ObjectWithRelocMap<OutDwarfFile>> &ObjectsForLinking);
 
   raw_fd_ostream &OutFile;
   BinaryHolder &BinHolder;

@@ -62,6 +62,48 @@ multiclass LMULSEWWriteResMXSEW<string name, list<ProcResourceKind> resources,
     def : WriteRes<!cast<SchedWrite>(name # "_WorstCase"), resources>;
 }
 
+// Define a SchedAlias for the SchedWrite associated with (name, mx) whose
+// behavior is aliased to a Variant. The Variant has Latency predLad and
+// ReleaseAtCycles predCycles if the SchedPredicate Pred is true, otherwise has
+// Latency noPredLat and ReleaseAtCycles noPredCycles. The WorstCase SchedWrite
+// is created similiarly if IsWorstCase is true.
+multiclass LMULWriteResMXVariant<string name, SchedPredicateBase Pred,
+                                 list<ProcResourceKind> resources,
+                                 int predLat, list<int> predCycles,
+                                 int noPredLat, list<int> noPredCycles,
+                                 string mx, bit IsWorstCase> {
+  defvar nameMX = name # "_" # mx;
+
+  // Define the different behaviors
+  def NAME # nameMX # "_Pred" : SchedWriteRes<resources> {
+    let Latency = predLat;
+    let ReleaseAtCycles = predCycles;
+  }
+  def NAME # nameMX # "_NoPred" : SchedWriteRes<resources> {
+    let Latency = noPredLat;
+    let ReleaseAtCycles = noPredCycles;
+  }
+
+  // Tie behavior to predicate
+  def NAME # nameMX # "_Variant" : SchedWriteVariant<[
+    SchedVar<Pred, [!cast<SchedWriteRes>(NAME # nameMX # "_Pred")]>,
+    SchedVar<NoSchedPred, [!cast<SchedWriteRes>(NAME # nameMX # "_NoPred")]>
+  ]>;
+  def : SchedAlias<
+    !cast<SchedReadWrite>(nameMX),
+    !cast<SchedReadWrite>(NAME # nameMX # "_Variant")>;
+
+  if IsWorstCase then {
+    def NAME # name # "_WorstCase_Variant" : SchedWriteVariant<[
+      SchedVar<Pred, [!cast<SchedWriteRes>(NAME # nameMX # "_Pred")]>,
+      SchedVar<NoSchedPred, [!cast<SchedWriteRes>(NAME # nameMX # "_NoPred")]>
+    ]>;
+    def : SchedAlias<
+      !cast<SchedReadWrite>(name # "_WorstCase"),
+      !cast<SchedReadWrite>(NAME # name # "_WorstCase_Variant")>;
+  }
+}
+
 // Define multiclasses to define SchedWrite, SchedRead,  WriteRes, and
 // ReadAdvance for each (name, LMUL) pair and for each LMUL in each of the
 // SchedMxList variants above. Each multiclass is responsible for defining
@@ -170,21 +212,21 @@ multiclass LMULSEWReadAdvance<string name, int val, list<SchedWrite> writes = []
   : LMULSEWReadAdvanceImpl<name, val, writes, SchedMxList>;
 
 multiclass LMULSEWSchedWritesWRed<string name>
-    : LMULSEWSchedWritesImpl<name, SchedMxListWRed, 0, 1>;
+    : LMULSEWSchedWritesImpl<name, SchedMxListWRed, isWidening=1>;
 multiclass LMULSEWWriteResWRed<string name, list<ProcResourceKind> resources>
-    : LMULSEWWriteResImpl<name, resources, SchedMxListWRed, 0, 1>;
+    : LMULSEWWriteResImpl<name, resources, SchedMxListWRed, isWidening=1>;
 
 multiclass LMULSEWSchedWritesFWRed<string name>
-    : LMULSEWSchedWritesImpl<name, SchedMxListFWRed, 1, 1>;
+    : LMULSEWSchedWritesImpl<name, SchedMxListFWRed, isF=1, isWidening=1>;
 multiclass LMULSEWWriteResFWRed<string name, list<ProcResourceKind> resources>
-    : LMULSEWWriteResImpl<name, resources, SchedMxListFWRed, 1, 1>;
+    : LMULSEWWriteResImpl<name, resources, SchedMxListFWRed, isF=1, isWidening=1>;
 
-multiclass LMULSEWSchedWritesF<string name> : LMULSEWSchedWritesImpl<name, SchedMxListF, 1>;
-multiclass LMULSEWSchedReadsF<string name> : LMULSEWSchedReadsImpl<name, SchedMxListF, 1>;
+multiclass LMULSEWSchedWritesF<string name> : LMULSEWSchedWritesImpl<name, SchedMxListF, isF=1>;
+multiclass LMULSEWSchedReadsF<string name> : LMULSEWSchedReadsImpl<name, SchedMxListF, isF=1>;
 multiclass LMULSEWWriteResF<string name, list<ProcResourceKind> resources>
-  : LMULSEWWriteResImpl<name, resources, SchedMxListF, 1>;
+  : LMULSEWWriteResImpl<name, resources, SchedMxListF, isF=1>;
 multiclass LMULSEWReadAdvanceF<string name, int val, list<SchedWrite> writes = []>
-  : LMULSEWReadAdvanceImpl<name, val, writes, SchedMxListF, 1>;
+  : LMULSEWReadAdvanceImpl<name, val, writes, SchedMxListF, isF=1>;
 
 multiclass LMULSchedWritesW<string name> : LMULSchedWritesImpl<name, SchedMxListW>;
 multiclass LMULSchedReadsW<string name> : LMULSchedReadsImpl<name, SchedMxListW>;
@@ -404,11 +446,13 @@ defm "" : LMULSchedWritesFW<"WriteVFNCvtFToFV">;
 // LMUL from VS2.
 // 14.1. Vector Single-Width Integer Reduction Instructions
 defm "" : LMULSEWSchedWrites<"WriteVIRedV_From">;
+defm "" : LMULSEWSchedWrites<"WriteVIRedMinMaxV_From">;
 // 14.2. Vector Widening Integer Reduction Instructions
 defm "" : LMULSEWSchedWritesWRed<"WriteVIWRedV_From">;
 // 14.3. Vector Single-Width Floating-Point Reduction Instructions
 defm "" : LMULSEWSchedWritesF<"WriteVFRedV_From">;
 defm "" : LMULSEWSchedWritesF<"WriteVFRedOV_From">;
+defm "" : LMULSEWSchedWritesF<"WriteVFRedMinMaxV_From">;
 // 14.4. Vector Widening Floating-Point Reduction Instructions
 defm "" : LMULSEWSchedWritesFWRed<"WriteVFWRedV_From">;
 defm "" : LMULSEWSchedWritesFWRed<"WriteVFWRedOV_From">;
@@ -633,6 +677,7 @@ def ReadVFRedV        : SchedRead;
 def ReadVFRedV0       : SchedRead;
 def ReadVFRedOV       : SchedRead;
 def ReadVFRedOV0      : SchedRead;
+def ReadVFRedMinMaxV  : SchedRead;
 // 14.4. Vector Widening Floating-Point Reduction Instructions
 def ReadVFWRedV       : SchedRead;
 def ReadVFWRedV0      : SchedRead;
@@ -684,6 +729,12 @@ def ReadVMov8V        : SchedRead;
 
 // Others
 def ReadVMask         : SchedRead;
+def ReadVMergeOp_WorstCase : SchedRead;
+foreach mx = SchedMxList in {
+  def ReadVMergeOp_ # mx : SchedRead;
+  foreach sew = SchedSEWSet<mx>.val in
+    def ReadVMergeOp_ # mx  # "_E" # sew : SchedRead;
+}
 
 //===----------------------------------------------------------------------===//
 /// Define default scheduler resources for V.
@@ -844,9 +895,11 @@ defm "" : LMULWriteResFW<"WriteVFNCvtFToFV", []>;
 
 // 14. Vector Reduction Operations
 defm "" : LMULSEWWriteRes<"WriteVIRedV_From", []>;
+defm "" : LMULSEWWriteRes<"WriteVIRedMinMaxV_From", []>;
 defm "" : LMULSEWWriteResWRed<"WriteVIWRedV_From", []>;
 defm "" : LMULSEWWriteResF<"WriteVFRedV_From", []>;
 defm "" : LMULSEWWriteResF<"WriteVFRedOV_From", []>;
+defm "" : LMULSEWWriteResF<"WriteVFRedMinMaxV_From", []>;
 defm "" : LMULSEWWriteResFWRed<"WriteVFWRedV_From", []>;
 defm "" : LMULSEWWriteResFWRed<"WriteVFWRedOV_From", []>;
 
@@ -1006,6 +1059,7 @@ def : ReadAdvance<ReadVFRedV, 0>;
 def : ReadAdvance<ReadVFRedV0, 0>;
 def : ReadAdvance<ReadVFRedOV, 0>;
 def : ReadAdvance<ReadVFRedOV0, 0>;
+def : ReadAdvance<ReadVFRedMinMaxV, 0>;
 def : ReadAdvance<ReadVFWRedV, 0>;
 def : ReadAdvance<ReadVFWRedV0, 0>;
 def : ReadAdvance<ReadVFWRedOV, 0>;
@@ -1044,6 +1098,12 @@ def : ReadAdvance<ReadVMov8V, 0>;
 
 // Others
 def : ReadAdvance<ReadVMask, 0>;
+def : ReadAdvance<ReadVMergeOp_WorstCase, 0>;
+foreach mx = SchedMxList in {
+  def : ReadAdvance<!cast<SchedRead>("ReadVMergeOp_" # mx), 0>;
+  foreach sew = SchedSEWSet<mx>.val in
+    def : ReadAdvance<!cast<SchedRead>("ReadVMergeOp_" # mx  # "_E" # sew), 0>;
+}
 
 } // Unsupported
 } // UnsupportedSchedV

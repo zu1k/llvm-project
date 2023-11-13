@@ -102,6 +102,17 @@ struct type_caster<MlirAttribute> {
   }
 };
 
+/// Casts object -> MlirBlock.
+template <>
+struct type_caster<MlirBlock> {
+  PYBIND11_TYPE_CASTER(MlirBlock, _("MlirBlock"));
+  bool load(handle src, bool) {
+    py::object capsule = mlirApiObjectToCapsule(src);
+    value = mlirPythonCapsuleToBlock(capsule.ptr());
+    return !mlirBlockIsNull(value);
+  }
+};
+
 /// Casts object -> MlirContext.
 template <>
 struct type_caster<MlirContext> {
@@ -223,6 +234,7 @@ struct type_caster<MlirValue> {
     return py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir"))
         .attr("Value")
         .attr(MLIR_PYTHON_CAPI_FACTORY_ATTR)(capsule)
+        .attr(MLIR_PYTHON_MAYBE_DOWNCAST_ATTR)()
         .release();
   };
 };
@@ -485,11 +497,10 @@ public:
     if (getTypeIDFunction) {
       py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir"))
           .attr(MLIR_PYTHON_CAPI_TYPE_CASTER_REGISTER_ATTR)(
-              getTypeIDFunction(),
-              pybind11::cpp_function(
-                  [thisClass = thisClass](const py::object &mlirType) {
-                    return thisClass(mlirType);
-                  }));
+              getTypeIDFunction())(pybind11::cpp_function(
+              [thisClass = thisClass](const py::object &mlirType) {
+                return thisClass(mlirType);
+              }));
     }
   }
 };

@@ -20,7 +20,9 @@
 #include "llvm/Analysis/ValueLattice.h"
 #include "llvm/Analysis/ValueLatticeUtils.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ModRef.h"
@@ -42,7 +44,7 @@ STATISTIC(NumInstReplaced,
           "Number of instructions replaced with (simpler) instruction");
 
 static cl::opt<unsigned> FuncSpecMaxIters(
-    "funcspec-max-iters", cl::init(1), cl::Hidden, cl::desc(
+    "funcspec-max-iters", cl::init(10), cl::Hidden, cl::desc(
     "The maximum number of iterations function specialization is run"));
 
 static void findReturnsToZap(Function &F,
@@ -190,8 +192,8 @@ static bool runIPSCCP(
           if (ME == MemoryEffects::unknown())
             return AL;
 
-          ME |= MemoryEffects(MemoryEffects::Other,
-                              ME.getModRef(MemoryEffects::ArgMem));
+          ME |= MemoryEffects(IRMemLocation::Other,
+                              ME.getModRef(IRMemLocation::ArgMem));
           return AL.addFnAttribute(
               F.getContext(),
               Attribute::getWithMemoryEffects(F.getContext(), ME));
@@ -370,6 +372,18 @@ static bool runIPSCCP(
       StoreInst *SI = cast<StoreInst>(GV->user_back());
       SI->eraseFromParent();
     }
+
+    // Try to create a debug constant expression for the global variable
+    // initializer value.
+    SmallVector<DIGlobalVariableExpression *, 1> GVEs;
+    GV->getDebugInfo(GVEs);
+    if (GVEs.size() == 1) {
+      DIBuilder DIB(M);
+      if (DIExpression *InitExpr = getExpressionForConstant(
+              DIB, *GV->getInitializer(), *GV->getValueType()))
+        GVEs[0]->replaceOperandWith(1, InitExpr);
+    }
+
     MadeChanges = true;
     M.eraseGlobalVariable(GV);
     ++NumGlobalConst;

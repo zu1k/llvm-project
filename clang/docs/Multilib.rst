@@ -79,10 +79,12 @@ file:
    a match.
    If more than one variant matches then a toolchain may opt to either use only
    the *last* matching multilib variant, or may use all matching variants,
-   thereby :ref:`layering<Multilib layering>` them.
+   thereby :ref:`layering<multilib-layering>` them.
 #. Generate ``-isystem`` and ``-L`` options. Iterate in reverse order over
    the matching multilib variants, and generate ``-isystem`` and ``-L``
    options based on the multilib variant's directory.
+
+.. _multilib-layering:
 
 Multilib layering
 =================
@@ -151,6 +153,7 @@ For a more comprehensive example see
 ``clang/test/Driver/baremetal-multilib.yaml`` in the ``llvm-project`` sources.
 
 .. code-block:: yaml
+
   # multilib.yaml
 
   # This format is experimental and is likely to change!

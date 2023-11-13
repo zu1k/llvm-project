@@ -282,12 +282,10 @@ T getWithDefaultOverride(const cl::opt<T> &ClOption,
 
 class ScalarizerVisitor : public InstVisitor<ScalarizerVisitor, bool> {
 public:
-  ScalarizerVisitor(unsigned ParallelLoopAccessMDKind, DominatorTree *DT,
-                    ScalarizerPassOptions Options)
-      : ParallelLoopAccessMDKind(ParallelLoopAccessMDKind), DT(DT),
-        ScalarizeVariableInsertExtract(
-            getWithDefaultOverride(ClScalarizeVariableInsertExtract,
-                                   Options.ScalarizeVariableInsertExtract)),
+  ScalarizerVisitor(DominatorTree *DT, ScalarizerPassOptions Options)
+      : DT(DT), ScalarizeVariableInsertExtract(getWithDefaultOverride(
+                    ClScalarizeVariableInsertExtract,
+                    Options.ScalarizeVariableInsertExtract)),
         ScalarizeLoadStore(getWithDefaultOverride(ClScalarizeLoadStore,
                                                   Options.ScalarizeLoadStore)),
         ScalarizeMinBits(getWithDefaultOverride(ClScalarizeMinBits,
@@ -337,8 +335,6 @@ private:
 
   SmallVector<WeakTrackingVH, 32> PotentiallyDeadInstrs;
 
-  unsigned ParallelLoopAccessMDKind;
-
   DominatorTree *DT;
 
   const bool ScalarizeVariableInsertExtract;
@@ -374,14 +370,7 @@ INITIALIZE_PASS_END(ScalarizerLegacyPass, "scalarizer",
 Scatterer::Scatterer(BasicBlock *bb, BasicBlock::iterator bbi, Value *v,
                      const VectorSplit &VS, ValueVector *cachePtr)
     : BB(bb), BBI(bbi), V(v), VS(VS), CachePtr(cachePtr) {
-  Type *Ty = V->getType();
-  if (Ty->isPointerTy()) {
-    assert(cast<PointerType>(Ty)->isOpaqueOrPointeeTypeMatches(VS.VecTy) &&
-           "Pointer element type mismatch");
-    IsPointer = true;
-  } else {
-    IsPointer = false;
-  }
+  IsPointer = V->getType()->isPointerTy();
   if (!CachePtr) {
     Tmp.resize(VS.NumFragments, nullptr);
   } else {
@@ -454,11 +443,8 @@ bool ScalarizerLegacyPass::runOnFunction(Function &F) {
   if (skipFunction(F))
     return false;
 
-  Module &M = *F.getParent();
-  unsigned ParallelLoopAccessMDKind =
-      M.getContext().getMDKindID("llvm.mem.parallel_loop_access");
   DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  ScalarizerVisitor Impl(ParallelLoopAccessMDKind, DT, ScalarizerPassOptions());
+  ScalarizerVisitor Impl(DT, ScalarizerPassOptions());
   return Impl.visit(F);
 }
 
@@ -565,7 +551,7 @@ bool ScalarizerVisitor::canTransferMetadata(unsigned Tag) {
           || Tag == LLVMContext::MD_invariant_load
           || Tag == LLVMContext::MD_alias_scope
           || Tag == LLVMContext::MD_noalias
-          || Tag == ParallelLoopAccessMDKind
+          || Tag == LLVMContext::MD_mem_parallel_loop_access
           || Tag == LLVMContext::MD_access_group);
 }
 
@@ -737,7 +723,8 @@ bool ScalarizerVisitor::splitCall(CallInst &CI) {
   // vector type, which is true for all current intrinsics.
   for (unsigned I = 0; I != NumArgs; ++I) {
     Value *OpI = CI.getOperand(I);
-    if (auto *OpVecTy = dyn_cast<FixedVectorType>(OpI->getType())) {
+    if ([[maybe_unused]] auto *OpVecTy =
+            dyn_cast<FixedVectorType>(OpI->getType())) {
       assert(OpVecTy->getNumElements() == VS->VecTy->getNumElements());
       std::optional<VectorSplit> OpVS = getVectorSplit(OpI->getType());
       if (!OpVS || OpVS->NumPacked != VS->NumPacked) {
@@ -1116,7 +1103,7 @@ bool ScalarizerVisitor::visitShuffleVectorInst(ShuffleVectorInst &SVI) {
   for (unsigned I = 0; I < VS->NumFragments; ++I) {
     int Selector = SVI.getMaskValue(I);
     if (Selector < 0)
-      Res[I] = UndefValue::get(VS->VecTy->getElementType());
+      Res[I] = PoisonValue::get(VS->VecTy->getElementType());
     else if (unsigned(Selector) < Op0.size())
       Res[I] = Op0[Selector];
     else
@@ -1260,11 +1247,8 @@ bool ScalarizerVisitor::finish() {
 }
 
 PreservedAnalyses ScalarizerPass::run(Function &F, FunctionAnalysisManager &AM) {
-  Module &M = *F.getParent();
-  unsigned ParallelLoopAccessMDKind =
-      M.getContext().getMDKindID("llvm.mem.parallel_loop_access");
   DominatorTree *DT = &AM.getResult<DominatorTreeAnalysis>(F);
-  ScalarizerVisitor Impl(ParallelLoopAccessMDKind, DT, Options);
+  ScalarizerVisitor Impl(DT, Options);
   bool Changed = Impl.visit(F);
   PreservedAnalyses PA;
   PA.preserve<DominatorTreeAnalysis>();

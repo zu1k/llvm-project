@@ -15,6 +15,7 @@
 #include "lld/Common/Memory.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Support/Compiler.h"
@@ -188,9 +189,12 @@ public:
 
   InputSection *getLinkOrderDep() const;
 
-  // Get the function symbol that encloses this offset from within the
-  // section.
-  Defined *getEnclosingFunction(uint64_t offset);
+  // Get a symbol that encloses this offset from within the section. If type is
+  // not zero, return a symbol with the specified type.
+  Defined *getEnclosingSymbol(uint64_t offset, uint8_t type = 0);
+  Defined *getEnclosingFunction(uint64_t offset) {
+    return getEnclosingSymbol(offset, llvm::ELF::STT_FUNC);
+  }
 
   // Returns a source location string. Used to construct an error message.
   std::string getLocation(uint64_t offset);
@@ -395,8 +399,10 @@ public:
   static InputSection discarded;
 
 private:
-  template <class ELFT, class RelTy>
-  void copyRelocations(uint8_t *buf, llvm::ArrayRef<RelTy> rels);
+  template <class ELFT, class RelTy> void copyRelocations(uint8_t *buf);
+
+  template <class ELFT, class RelTy, class RelIt>
+  void copyRelocations(uint8_t *buf, llvm::iterator_range<RelIt> rels);
 
   template <class ELFT> void copyShtGroup(uint8_t *buf);
 };

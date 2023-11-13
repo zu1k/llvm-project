@@ -105,6 +105,13 @@ public:
       } else if constexpr (std::is_same_v<T, parser::ActionStmt>) {
         return std::visit(
             common::visitors{
+                [&](const common::Indirection<parser::CallStmt> &x) {
+                  addEvaluation(lower::pft::Evaluation{
+                      removeIndirection(x), pftParentStack.back(),
+                      stmt.position, stmt.label});
+                  checkForRoundingModeCall(x.value());
+                  return true;
+                },
                 [&](const common::Indirection<parser::IfStmt> &x) {
                   convertIfStmt(x.value(), stmt.position, stmt.label);
                   return false;
@@ -120,6 +127,24 @@ public:
       }
     }
     return true;
+  }
+
+  /// Check for a call statement that could modify the fp rounding mode.
+  void checkForRoundingModeCall(const parser::CallStmt &callStmt) {
+    const auto &pd = std::get<parser::ProcedureDesignator>(callStmt.call.t);
+    const auto *callName = std::get_if<parser::Name>(&pd.u);
+    if (!callName)
+      return;
+    const Fortran::semantics::Symbol &procSym = callName->symbol->GetUltimate();
+    llvm::StringRef procName = toStringRef(procSym.name());
+    if (!procName.startswith("ieee_set_"))
+      return;
+    if (procName == "ieee_set_rounding_mode_0" ||
+        procName == "ieee_set_modes_0" || procName == "ieee_set_status_0")
+      evaluationListStack.back()
+          ->back()
+          .getOwningProcedure()
+          ->mayModifyRoundingMode = true;
   }
 
   /// Convert an IfStmt into an IfConstruct, retaining the IfStmt as the
@@ -211,6 +236,17 @@ public:
     if (pftParentStack.back().isA<lower::pft::Program>()) {
       addUnit(
           lower::pft::CompilerDirectiveUnit(directive, pftParentStack.back()));
+      return false;
+    }
+    return enterConstructOrDirective(directive);
+  }
+
+  bool Pre(const parser::OpenACCRoutineConstruct &directive) {
+    assert(pftParentStack.size() > 0 &&
+           "At least the Program must be a parent");
+    if (pftParentStack.back().isA<lower::pft::Program>()) {
+      addUnit(
+          lower::pft::OpenACCDirectiveUnit(directive, pftParentStack.back()));
       return false;
     }
     return enterConstructOrDirective(directive);
@@ -1108,6 +1144,9 @@ public:
                      [&](const lower::pft::CompilerDirectiveUnit &unit) {
                        dumpCompilerDirectiveUnit(outputStream, unit);
                      },
+                     [&](const lower::pft::OpenACCDirectiveUnit &unit) {
+                       dumpOpenACCDirectiveUnit(outputStream, unit);
+                     },
                  },
                  unit);
     }
@@ -1253,6 +1292,16 @@ public:
     outputStream << directive.get<Fortran::parser::CompilerDirective>()
                         .source.ToString();
     outputStream << "\nEnd CompilerDirective\n\n";
+  }
+
+  void
+  dumpOpenACCDirectiveUnit(llvm::raw_ostream &outputStream,
+                           const lower::pft::OpenACCDirectiveUnit &directive) {
+    outputStream << getNodeIndex(directive) << " ";
+    outputStream << "OpenACCDirective: !$acc ";
+    outputStream << directive.get<Fortran::parser::OpenACCRoutineConstruct>()
+                        .source.ToString();
+    outputStream << "\nEnd OpenACCDirective\n\n";
   }
 
   template <typename T>
@@ -1464,7 +1513,7 @@ private:
     // Derived type component symbols may be collected by "CollectSymbols"
     // below when processing something like "real :: x(derived%component)". The
     // symbol "component" has "ObjectEntityDetails", but it should not be
-    // instantiated: it is is part of "derived" that should be the only one to
+    // instantiated: it is part of "derived" that should be the only one to
     // be instantiated.
     if (sym.owner().IsDerivedType())
       return 0;
@@ -1520,7 +1569,8 @@ private:
       // Handle any symbols in initialization expressions.
       if (auto e = details->init())
         for (const auto &s : evaluate::CollectSymbols(*e))
-          depth = std::max(analyze(s) + 1, depth);
+          if (!s->has<semantics::DerivedTypeDetails>())
+            depth = std::max(analyze(s) + 1, depth);
     }
     adjustSize(depth + 1);
     bool global = lower::symbolIsGlobal(sym);

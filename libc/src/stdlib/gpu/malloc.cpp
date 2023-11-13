@@ -10,11 +10,11 @@
 #include "src/__support/RPC/rpc_client.h"
 #include "src/__support/common.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE {
 
 LLVM_LIBC_FUNCTION(void *, malloc, (size_t size)) {
   void *ptr = nullptr;
-  rpc::Client::Port port = rpc::client.open<rpc::MALLOC>();
+  rpc::Client::Port port = rpc::client.open<RPC_MALLOC>();
   port.send_and_recv([=](rpc::Buffer *buffer) { buffer->data[0] = size; },
                      [&](rpc::Buffer *buffer) {
                        ptr = reinterpret_cast<void *>(buffer->data[0]);
@@ -23,4 +23,4 @@ LLVM_LIBC_FUNCTION(void *, malloc, (size_t size)) {
   return ptr;
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE

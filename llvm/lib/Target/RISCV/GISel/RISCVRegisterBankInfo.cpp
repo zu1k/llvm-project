@@ -12,6 +12,7 @@
 
 #include "RISCVRegisterBankInfo.h"
 #include "MCTargetDesc/RISCVMCTargetDesc.h"
+#include "RISCVSubtarget.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterBank.h"
 #include "llvm/CodeGen/RegisterBankInfo.h"
@@ -20,7 +21,241 @@
 #define GET_TARGET_REGBANK_IMPL
 #include "RISCVGenRegisterBank.inc"
 
+namespace llvm {
+namespace RISCV {
+
+const RegisterBankInfo::PartialMapping PartMappings[] = {
+    {0, 32, GPRBRegBank},
+    {0, 64, GPRBRegBank},
+    {0, 32, FPRBRegBank},
+    {0, 64, FPRBRegBank},
+};
+
+enum PartialMappingIdx {
+  PMI_GPRB32 = 0,
+  PMI_GPRB64 = 1,
+  PMI_FPRB32 = 2,
+  PMI_FPRB64 = 3,
+};
+
+const RegisterBankInfo::ValueMapping ValueMappings[] = {
+    // Invalid value mapping.
+    {nullptr, 0},
+    // Maximum 3 GPR operands; 32 bit.
+    {&PartMappings[PMI_GPRB32], 1},
+    {&PartMappings[PMI_GPRB32], 1},
+    {&PartMappings[PMI_GPRB32], 1},
+    // Maximum 3 GPR operands; 64 bit.
+    {&PartMappings[PMI_GPRB64], 1},
+    {&PartMappings[PMI_GPRB64], 1},
+    {&PartMappings[PMI_GPRB64], 1},
+    // Maximum 3 FPR operands; 32 bit.
+    {&PartMappings[PMI_FPRB32], 1},
+    {&PartMappings[PMI_FPRB32], 1},
+    {&PartMappings[PMI_FPRB32], 1},
+    // Maximum 3 FPR operands; 64 bit.
+    {&PartMappings[PMI_FPRB64], 1},
+    {&PartMappings[PMI_FPRB64], 1},
+    {&PartMappings[PMI_FPRB64], 1},
+};
+
+enum ValueMappingIdx {
+  InvalidIdx = 0,
+  GPRB32Idx = 1,
+  GPRB64Idx = 4,
+  FPRB32Idx = 7,
+  FPRB64Idx = 10,
+};
+} // namespace RISCV
+} // namespace llvm
+
 using namespace llvm;
 
 RISCVRegisterBankInfo::RISCVRegisterBankInfo(unsigned HwMode)
     : RISCVGenRegisterBankInfo(HwMode) {}
+
+const RegisterBank &
+RISCVRegisterBankInfo::getRegBankFromRegClass(const TargetRegisterClass &RC,
+                                              LLT Ty) const {
+  switch (RC.getID()) {
+  default:
+    llvm_unreachable("Register class not supported");
+  case RISCV::GPRRegClassID:
+  case RISCV::GPRF16RegClassID:
+  case RISCV::GPRF32RegClassID:
+  case RISCV::GPRNoX0RegClassID:
+  case RISCV::GPRNoX0X2RegClassID:
+  case RISCV::GPRJALRRegClassID:
+  case RISCV::GPRTCRegClassID:
+  case RISCV::GPRC_and_GPRTCRegClassID:
+  case RISCV::GPRCRegClassID:
+  case RISCV::GPRC_and_SR07RegClassID:
+  case RISCV::SR07RegClassID:
+  case RISCV::SPRegClassID:
+  case RISCV::GPRX0RegClassID:
+    return getRegBank(RISCV::GPRBRegBankID);
+  case RISCV::FPR64RegClassID:
+  case RISCV::FPR16RegClassID:
+  case RISCV::FPR32RegClassID:
+  case RISCV::FPR64CRegClassID:
+  case RISCV::FPR32CRegClassID:
+    return getRegBank(RISCV::FPRBRegBankID);
+  }
+}
+
+static const RegisterBankInfo::ValueMapping *getFPValueMapping(unsigned Size) {
+  assert(Size == 32 || Size == 64);
+  unsigned Idx = Size == 64 ? RISCV::FPRB64Idx : RISCV::FPRB32Idx;
+  return &RISCV::ValueMappings[Idx];
+}
+
+const RegisterBankInfo::InstructionMapping &
+RISCVRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
+  const unsigned Opc = MI.getOpcode();
+
+  // Try the default logic for non-generic instructions that are either copies
+  // or already have some operands assigned to banks.
+  if (!isPreISelGenericOpcode(Opc) || Opc == TargetOpcode::G_PHI) {
+    const InstructionMapping &Mapping = getInstrMappingImpl(MI);
+    if (Mapping.isValid())
+      return Mapping;
+  }
+
+  const MachineFunction &MF = *MI.getParent()->getParent();
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+
+  unsigned GPRSize = getMaximumSize(RISCV::GPRBRegBankID);
+  assert((GPRSize == 32 || GPRSize == 64) && "Unexpected GPR size");
+
+  unsigned NumOperands = MI.getNumOperands();
+  const ValueMapping *GPRValueMapping =
+      &RISCV::ValueMappings[GPRSize == 64 ? RISCV::GPRB64Idx
+                                          : RISCV::GPRB32Idx];
+  const ValueMapping *OperandsMapping = GPRValueMapping;
+
+  switch (Opc) {
+  case TargetOpcode::G_INVOKE_REGION_START:
+    OperandsMapping = getOperandsMapping({});
+    break;
+  case TargetOpcode::G_ADD:
+  case TargetOpcode::G_SUB:
+  case TargetOpcode::G_SHL:
+  case TargetOpcode::G_ASHR:
+  case TargetOpcode::G_LSHR:
+  case TargetOpcode::G_AND:
+  case TargetOpcode::G_OR:
+  case TargetOpcode::G_XOR:
+  case TargetOpcode::G_MUL:
+  case TargetOpcode::G_SDIV:
+  case TargetOpcode::G_SREM:
+  case TargetOpcode::G_SMULH:
+  case TargetOpcode::G_UDIV:
+  case TargetOpcode::G_UREM:
+  case TargetOpcode::G_UMULH:
+  case TargetOpcode::G_PTR_ADD:
+  case TargetOpcode::G_PTRTOINT:
+  case TargetOpcode::G_INTTOPTR:
+  case TargetOpcode::G_TRUNC:
+  case TargetOpcode::G_ANYEXT:
+  case TargetOpcode::G_SEXT:
+  case TargetOpcode::G_ZEXT:
+  case TargetOpcode::G_LOAD:
+  case TargetOpcode::G_SEXTLOAD:
+  case TargetOpcode::G_ZEXTLOAD:
+  case TargetOpcode::G_STORE:
+    break;
+  case TargetOpcode::G_CONSTANT:
+  case TargetOpcode::G_FRAME_INDEX:
+  case TargetOpcode::G_GLOBAL_VALUE:
+  case TargetOpcode::G_JUMP_TABLE:
+  case TargetOpcode::G_BRCOND:
+    OperandsMapping = getOperandsMapping({GPRValueMapping, nullptr});
+    break;
+  case TargetOpcode::G_BR:
+    OperandsMapping = getOperandsMapping({nullptr});
+    break;
+  case TargetOpcode::G_BRJT:
+    OperandsMapping =
+        getOperandsMapping({GPRValueMapping, nullptr, GPRValueMapping});
+    break;
+  case TargetOpcode::G_ICMP:
+    OperandsMapping = getOperandsMapping(
+        {GPRValueMapping, nullptr, GPRValueMapping, GPRValueMapping});
+    break;
+  case TargetOpcode::G_SEXT_INREG:
+    OperandsMapping =
+        getOperandsMapping({GPRValueMapping, GPRValueMapping, nullptr});
+    break;
+  case TargetOpcode::G_SELECT:
+    OperandsMapping = getOperandsMapping(
+        {GPRValueMapping, GPRValueMapping, GPRValueMapping, GPRValueMapping});
+    break;
+  case TargetOpcode::G_FADD:
+  case TargetOpcode::G_FSUB:
+  case TargetOpcode::G_FMUL:
+  case TargetOpcode::G_FDIV:
+  case TargetOpcode::G_FNEG:
+  case TargetOpcode::G_FABS:
+  case TargetOpcode::G_FSQRT:
+  case TargetOpcode::G_FMAXNUM:
+  case TargetOpcode::G_FMINNUM: {
+    LLT Ty = MRI.getType(MI.getOperand(0).getReg());
+    OperandsMapping = getFPValueMapping(Ty.getSizeInBits());
+    break;
+  }
+  case TargetOpcode::G_FMA: {
+    LLT Ty = MRI.getType(MI.getOperand(0).getReg());
+    const RegisterBankInfo::ValueMapping *FPValueMapping =
+        getFPValueMapping(Ty.getSizeInBits());
+    OperandsMapping = getOperandsMapping(
+        {FPValueMapping, FPValueMapping, FPValueMapping, FPValueMapping});
+    break;
+  }
+  case TargetOpcode::G_FPEXT:
+  case TargetOpcode::G_FPTRUNC: {
+    LLT ToTy = MRI.getType(MI.getOperand(0).getReg());
+    LLT FromTy = MRI.getType(MI.getOperand(1).getReg());
+    OperandsMapping =
+        getOperandsMapping({getFPValueMapping(ToTy.getSizeInBits()),
+                            getFPValueMapping(FromTy.getSizeInBits())});
+    break;
+  }
+  case TargetOpcode::G_FPTOSI:
+  case TargetOpcode::G_FPTOUI: {
+    LLT Ty = MRI.getType(MI.getOperand(1).getReg());
+    OperandsMapping =
+        getOperandsMapping({GPRValueMapping,
+                            getFPValueMapping(Ty.getSizeInBits())});
+    break;
+  }
+  case TargetOpcode::G_SITOFP:
+  case TargetOpcode::G_UITOFP: {
+    LLT Ty = MRI.getType(MI.getOperand(0).getReg());
+    OperandsMapping = getOperandsMapping(
+        {getFPValueMapping(Ty.getSizeInBits()), GPRValueMapping});
+    break;
+  }
+  case TargetOpcode::G_FCONSTANT: {
+    LLT Ty = MRI.getType(MI.getOperand(0).getReg());
+    OperandsMapping =
+        getOperandsMapping({getFPValueMapping(Ty.getSizeInBits()), nullptr});
+    break;
+  }
+  case TargetOpcode::G_FCMP: {
+    LLT Ty = MRI.getType(MI.getOperand(2).getReg());
+
+    unsigned Size = Ty.getSizeInBits();
+    assert((Size == 32 || Size == 64) && "Unsupported size for G_FCMP");
+
+    auto *FPRValueMapping = getFPValueMapping(Size);
+    OperandsMapping = getOperandsMapping(
+        {GPRValueMapping, nullptr, FPRValueMapping, FPRValueMapping});
+    break;
+  }
+  default:
+    return getInvalidInstructionMapping();
+  }
+
+  return getInstructionMapping(DefaultMappingID, /*Cost=*/1, OperandsMapping,
+                               NumOperands);
+}

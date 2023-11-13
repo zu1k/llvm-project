@@ -32,6 +32,20 @@ bool arm::isARMMProfile(const llvm::Triple &Triple) {
   return llvm::ARM::parseArchProfile(Arch) == llvm::ARM::ProfileKind::M;
 }
 
+// On Arm the endianness of the output file is determined by the target and
+// can be overridden by the pseudo-target flags '-mlittle-endian'/'-EL' and
+// '-mbig-endian'/'-EB'. Unlike other targets the flag does not result in a
+// normalized triple so we must handle the flag here.
+bool arm::isARMBigEndian(const llvm::Triple &Triple, const ArgList &Args) {
+  if (Arg *A = Args.getLastArg(options::OPT_mlittle_endian,
+                               options::OPT_mbig_endian)) {
+    return !A->getOption().matches(options::OPT_mlittle_endian);
+  }
+
+  return Triple.getArch() == llvm::Triple::armeb ||
+         Triple.getArch() == llvm::Triple::thumbeb;
+}
+
 // True if A-profile.
 bool arm::isARMAProfile(const llvm::Triple &Triple) {
   llvm::StringRef Arch = Triple.getArchName();
@@ -184,11 +198,16 @@ arm::ReadTPMode arm::getReadTPMode(const Driver &D, const ArgList &Args,
   if (Arg *A = Args.getLastArg(options::OPT_mtp_mode_EQ)) {
     arm::ReadTPMode ThreadPointer =
         llvm::StringSwitch<arm::ReadTPMode>(A->getValue())
-            .Case("cp15", ReadTPMode::Cp15)
+            .Case("cp15", ReadTPMode::TPIDRURO)
+            .Case("tpidrurw", ReadTPMode::TPIDRURW)
+            .Case("tpidruro", ReadTPMode::TPIDRURO)
+            .Case("tpidrprw", ReadTPMode::TPIDRPRW)
             .Case("soft", ReadTPMode::Soft)
             .Default(ReadTPMode::Invalid);
-    if (ThreadPointer == ReadTPMode::Cp15 && !isHardTPSupported(Triple) &&
-        !ForAS) {
+    if ((ThreadPointer == ReadTPMode::TPIDRURW ||
+         ThreadPointer == ReadTPMode::TPIDRURO ||
+         ThreadPointer == ReadTPMode::TPIDRPRW) &&
+        !isHardTPSupported(Triple) && !ForAS) {
       D.Diag(diag::err_target_unsupported_tp_hard) << Triple.getArchName();
       return ReadTPMode::Invalid;
     }
@@ -385,6 +404,7 @@ arm::FloatABI arm::getDefaultFloatABI(const llvm::Triple &Triple) {
     }
     break;
 
+  case llvm::Triple::Haiku:
   case llvm::Triple::OpenBSD:
     return FloatABI::SoftFP;
 
@@ -519,10 +539,20 @@ llvm::ARM::FPUKind arm::getARMTargetFeatures(const Driver &D,
         }
       }
     }
+
+    // The integrated assembler doesn't implement e_flags setting behavior for
+    // -meabi=gnu (gcc -mabi={apcs-gnu,atpcs} passes -meabi=gnu to gas). For
+    // compatibility we accept but warn.
+    if (Arg *A = Args.getLastArgNoClaim(options::OPT_mabi_EQ))
+      A->ignoreTargetSpecific();
   }
 
-  if (getReadTPMode(D, Args, Triple, ForAS) == ReadTPMode::Cp15)
-    Features.push_back("+read-tp-hard");
+  if (getReadTPMode(D, Args, Triple, ForAS) == ReadTPMode::TPIDRURW)
+    Features.push_back("+read-tp-tpidrurw");
+  if (getReadTPMode(D, Args, Triple, ForAS) == ReadTPMode::TPIDRURO)
+    Features.push_back("+read-tp-tpidruro");
+  if (getReadTPMode(D, Args, Triple, ForAS) == ReadTPMode::TPIDRPRW)
+    Features.push_back("+read-tp-tpidrprw");
 
   const Arg *ArchArg = Args.getLastArg(options::OPT_march_EQ);
   const Arg *CPUArg = Args.getLastArg(options::OPT_mcpu_EQ);
@@ -597,6 +627,11 @@ llvm::ARM::FPUKind arm::getARMTargetFeatures(const Driver &D,
     if (!llvm::ARM::getFPUFeatures(FPUKind, Features))
       D.Diag(clang::diag::err_drv_clang_unsupported)
           << std::string("-mfpu=") + AndroidFPU;
+  } else if (ArchArgFPUKind != llvm::ARM::FK_INVALID ||
+             CPUArgFPUKind != llvm::ARM::FK_INVALID) {
+    FPUKind =
+        CPUArgFPUKind != llvm::ARM::FK_INVALID ? CPUArgFPUKind : ArchArgFPUKind;
+    (void)llvm::ARM::getFPUFeatures(FPUKind, Features);
   } else {
     if (!ForAS) {
       std::string CPU = arm::getARMTargetCPU(CPUName, ArchName, Triple);
@@ -815,9 +850,16 @@ fp16_fml_fallthrough:
     if (Arg *A = Args.getLastArg(options::OPT_mexecute_only, options::OPT_mno_execute_only)) {
       if (A->getOption().matches(options::OPT_mexecute_only)) {
         if (getARMSubArchVersionNumber(Triple) < 7 &&
-            llvm::ARM::parseArch(Triple.getArchName()) != llvm::ARM::ArchKind::ARMV6T2)
+            llvm::ARM::parseArch(Triple.getArchName()) != llvm::ARM::ArchKind::ARMV6T2 &&
+            llvm::ARM::parseArch(Triple.getArchName()) != llvm::ARM::ArchKind::ARMV6M)
               D.Diag(diag::err_target_unsupported_execute_only) << Triple.getArchName();
-        else if (Arg *B = Args.getLastArg(options::OPT_mno_movt))
+        else if (llvm::ARM::parseArch(Triple.getArchName()) == llvm::ARM::ArchKind::ARMV6M) {
+          if (Arg *PIArg = Args.getLastArg(options::OPT_fropi, options::OPT_frwpi,
+                                           options::OPT_fpic, options::OPT_fpie,
+                                           options::OPT_fPIC, options::OPT_fPIE))
+            D.Diag(diag::err_opt_not_valid_with_opt_on_target)
+                << A->getAsString(Args) << PIArg->getAsString(Args) << Triple.getArchName();
+        } else if (Arg *B = Args.getLastArg(options::OPT_mno_movt))
           D.Diag(diag::err_opt_not_valid_with_opt)
               << A->getAsString(Args) << B->getAsString(Args);
         Features.push_back("+execute-only");

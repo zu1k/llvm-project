@@ -238,9 +238,7 @@ public:
     AU.addRequired<LiveIntervals>();
     AU.addPreserved<SlotIndexes>();
     AU.addPreserved<LiveIntervals>();
-    AU.addRequired<MachineDominatorTree>();
     AU.addPreserved<MachineDominatorTree>();
-    AU.addRequired<MachinePostDominatorTree>();
     AU.addPreserved<MachinePostDominatorTree>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
@@ -454,14 +452,13 @@ void SIWholeQuadMode::markOperand(const MachineInstr &MI,
     // Handle physical registers that we need to track; this is mostly relevant
     // for VCC, which can appear as the (implicit) input of a uniform branch,
     // e.g. when a loop counter is stored in a VGPR.
-    for (MCRegUnitIterator RegUnit(Reg.asMCReg(), TRI); RegUnit.isValid();
-         ++RegUnit) {
-      LiveRange &LR = LIS->getRegUnit(*RegUnit);
+    for (MCRegUnit Unit : TRI->regunits(Reg.asMCReg())) {
+      LiveRange &LR = LIS->getRegUnit(Unit);
       const VNInfo *Value = LR.Query(LIS->getInstructionIndex(MI)).valueIn();
       if (!Value)
         continue;
 
-      markDefs(MI, LR, *RegUnit, AMDGPU::NoSubRegister, Flag, Worklist);
+      markDefs(MI, LR, Unit, AMDGPU::NoSubRegister, Flag, Worklist);
     }
   }
 }
@@ -1137,7 +1134,7 @@ MachineBasicBlock::iterator SIWholeQuadMode::prepareInsertion(
     return PreferLast ? Last : First;
 
   LiveRange &LR =
-      LIS->getRegUnit(*MCRegUnitIterator(MCRegister::from(AMDGPU::SCC), TRI));
+      LIS->getRegUnit(*TRI->regunits(MCRegister::from(AMDGPU::SCC)).begin());
   auto MBBE = MBB.end();
   SlotIndex FirstIdx = First != MBBE ? LIS->getInstructionIndex(*First)
                                      : LIS->getMBBEndIdx(&MBB);
@@ -1321,7 +1318,8 @@ void SIWholeQuadMode::processBlock(MachineBasicBlock &MBB, bool IsEntry) {
   auto II = MBB.getFirstNonPHI(), IE = MBB.end();
   if (IsEntry) {
     // Skip the instruction that saves LiveMask
-    if (II != IE && II->getOpcode() == AMDGPU::COPY)
+    if (II != IE && II->getOpcode() == AMDGPU::COPY &&
+        II->getOperand(1).getReg() == TRI->getExec())
       ++II;
   }
 
@@ -1595,8 +1593,8 @@ bool SIWholeQuadMode::runOnMachineFunction(MachineFunction &MF) {
   TRI = &TII->getRegisterInfo();
   MRI = &MF.getRegInfo();
   LIS = &getAnalysis<LiveIntervals>();
-  MDT = &getAnalysis<MachineDominatorTree>();
-  PDT = &getAnalysis<MachinePostDominatorTree>();
+  MDT = getAnalysisIfAvailable<MachineDominatorTree>();
+  PDT = getAnalysisIfAvailable<MachinePostDominatorTree>();
 
   if (ST->isWave32()) {
     AndOpc = AMDGPU::S_AND_B32;

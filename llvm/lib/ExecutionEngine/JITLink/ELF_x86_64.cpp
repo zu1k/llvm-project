@@ -16,7 +16,6 @@
 #include "llvm/ExecutionEngine/JITLink/TableManager.h"
 #include "llvm/ExecutionEngine/JITLink/x86_64.h"
 #include "llvm/Object/ELFObjectFile.h"
-#include "llvm/Support/Endian.h"
 
 #include "DefineExternalSectionStartAndEndSymbols.h"
 #include "EHFrameSupportImpl.h"
@@ -228,7 +227,7 @@ private:
 public:
   ELFLinkGraphBuilder_x86_64(StringRef FileName,
                              const object::ELFFile<object::ELF64LE> &Obj,
-                             LinkGraph::FeatureVector Features)
+                             SubtargetFeatures Features)
       : ELFLinkGraphBuilder(Obj, Triple("x86_64-unknown-linux"),
                             std::move(Features), FileName,
                             x86_64::getEdgeKindName) {}
@@ -242,8 +241,10 @@ public:
                       std::unique_ptr<LinkGraph> G,
                       PassConfiguration PassConfig)
       : JITLinker(std::move(Ctx), std::move(G), std::move(PassConfig)) {
-    getPassConfig().PostAllocationPasses.push_back(
-        [this](LinkGraph &G) { return getOrCreateGOTSymbol(G); });
+
+    if (shouldAddDefaultTargetPasses(getGraph().getTargetTriple()))
+      getPassConfig().PostAllocationPasses.push_back(
+          [this](LinkGraph &G) { return getOrCreateGOTSymbol(G); });
   }
 
 private:
@@ -338,7 +339,7 @@ createLinkGraphFromELFObject_x86_64(MemoryBufferRef ObjectBuffer) {
   auto &ELFObjFile = cast<object::ELFObjectFile<object::ELF64LE>>(**ELFObj);
   return ELFLinkGraphBuilder_x86_64((*ELFObj)->getFileName(),
                                     ELFObjFile.getELFFile(),
-                                    Features->getFeatures())
+                                    std::move(*Features))
       .buildGraph();
 }
 

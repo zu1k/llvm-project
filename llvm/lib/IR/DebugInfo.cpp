@@ -1487,7 +1487,7 @@ uint16_t LLVMGetDINodeTag(LLVMMetadataRef MD) {
 }
 
 const char *LLVMDITypeGetName(LLVMMetadataRef DType, size_t *Length) {
-  StringRef Str = unwrap<DIType>(DType)->getName();
+  StringRef Str = unwrapDI<DIType>(DType)->getName();
   *Length = Str.size();
   return Str.data();
 }
@@ -1947,7 +1947,7 @@ std::optional<AssignmentInfo> at::getAssignmentInfo(const DataLayout &DL,
     // We can't use a non-const size, bail.
     return std::nullopt;
   uint64_t SizeInBits = 8 * ConstLengthInBytes->getZExtValue();
-  return getAssignmentInfoImpl(DL, StoreDest, TypeSize::getFixed(SizeInBits));
+  return getAssignmentInfoImpl(DL, StoreDest, TypeSize::Fixed(SizeInBits));
 }
 
 std::optional<AssignmentInfo> at::getAssignmentInfo(const DataLayout &DL,

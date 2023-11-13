@@ -659,6 +659,7 @@ def Tensor_GatherOp : Tensor_Op<"gather", [
     }
   }];
   let hasVerifier = 1;
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -750,9 +751,7 @@ def Tensor_InsertOp : Tensor_Op<"insert", [
   }];
 
   let extraClassDeclaration = [{
-    std::pair<int64_t, int64_t> getDpsInitsPositionRange() {
-      return {1, 2};  // `dest` operand
-    }
+    MutableOperandRange getDpsInitsMutable() { return getDestMutable(); }
   }];
 
   let hasFolder = 1;
@@ -892,9 +891,7 @@ def Tensor_InsertSliceOp : Tensor_OpWithOffsetSizesAndStrides<"insert_slice", [
     /// and `strides` operands.
     static unsigned getOffsetSizeAndStrideStartOperandIndex() { return 2; }
 
-    std::pair<int64_t, int64_t> getDpsInitsPositionRange() {
-      return {1, 2};  // `dest` operand
-    }
+    MutableOperandRange getDpsInitsMutable() { return getDestMutable(); }
   }];
 
   let hasCanonicalizer = 1;
@@ -990,6 +987,7 @@ def Tensor_ReshapeOp: Tensor_Op<"reshape", [
     $source `(` $shape `)` attr-dict `:` functional-type(operands, results)
   }];
   let hasVerifier = 1;
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1172,16 +1170,17 @@ def Tensor_PadOp : Tensor_Op<"pad", [
 
     * source: the "base" tensor on which to pad.
     * low: A list contains the padding along the start of each
-           dimension, i.e `low`.
+           dimension, i.e., how many padded values are prepended
+           to the beginning of the tensor in each dimension.
     * high: A list contains the padding along the end of each
-            dimension, i.e. `high`.
+            dimension, i.e., how many padded values are appended
+            to the end of the tensor in each dimension.
     * nofold: indicates that the operation should not be folded when source and
               result types are equal.
 
-    The result tensor dimensions are `low` + `dim` + `high` along that
-    dimension. The number of elements of `low` and `high` must match
-    the rank of the input tensor. They can be either a constant or a
-    dynamic value.
+    The result tensor dimensions are `low[i]` + `dim[i]` + `high[i]` for each
+    dimension `i`. The number of elements of `low` and `high` must match the
+    rank of the input tensor. They can be either a constant or a dynamic value.
 
     The region of the `tensor.pad` operation returns the value to use
     for the padding. The arguments of the region represent the index
@@ -1193,7 +1192,21 @@ def Tensor_PadOp : Tensor_Op<"pad", [
     if the source type and the padded type have the same static shape. This can
     be used, e.g., for packing or promotion to faster memory.
 
-    Example 1:
+    Example 1: add 3 zeros to the beginning and 5 zeros to the end of a 1D
+    tensor.
+
+    ```mlir
+      %arg0 = ... : tensor<10xi32>
+      %c0_i32 = arith.constant 0 : i32
+      %padded = tensor.pad %arg0 low[3] high[5] {
+      ^bb0(%arg1: index):
+        tensor.yield %c0_i32 : i32
+      } : tensor<10xi32> to tensor<18xi32>
+    ```
+
+    Example 2: add 1 value to the beginning of dimension 0, 2 values to the end
+    of dimension 0, 2 values to the start of dimension 1, and 3 values to the
+    end of dimension 1.
 
     ```mlir
       %pad_value = ... : f32
@@ -1203,7 +1216,7 @@ def Tensor_PadOp : Tensor_Op<"pad", [
       } : tensor<?x?xf32> to tensor<?x?xf32>
     ```
 
-    Example 2:
+    Example 3:
 
     ```mlir
       %pad_value = ... : f32
@@ -1213,7 +1226,7 @@ def Tensor_PadOp : Tensor_Op<"pad", [
       } : tensor<1x2x2x?xf32> to tensor<6x?x?x?xf32>
     ```
 
-    Example 3:
+    Example 4:
 
     ```mlir
       %pad_value = ... : f32
@@ -1223,10 +1236,11 @@ def Tensor_PadOp : Tensor_Op<"pad", [
       } : tensor<2x3xf32> to tensor<?x?xf32>
     ```
 
-    Example 4:
+    Example 5: Force a padded value to be always exist with `nofold`, even
+    though the padding config specifies that no new elements will be added to
+    the tensor.
 
     ```mlir
-      // Force a padded value to be always exist with `nofold`.
       %pad_value = ... : f32
       %0 = tensor.pad %arg0 nofold low[0, 0] high[0, 0] {
       ^bb0(%arg1: index, %arg2: index):
@@ -1714,10 +1728,7 @@ class Tensor_RelayoutOp<string mnemonic, list<Trait> traits = []> :
     RankedTensorType getDestType() {
       return ::llvm::cast<RankedTensorType>(getDest().getType()); };
 
-    /// Return position for init operand. Init operand is `dest`.
-    std::pair<int64_t, int64_t> getDpsInitsPositionRange() {
-      return {1, 2}; // `dest` operand
-    }
+    MutableOperandRange getDpsInitsMutable() { return getDestMutable(); }
 
     /// Interface method for ConditionallySpeculatable.
     Speculation::Speculatability getSpeculatability();
@@ -1823,7 +1834,9 @@ def Tensor_PackOp : Tensor_RelayoutOp<"pack", [
 
     // Returns true if we have enough static information to catch undefined
     // behavior when the tile size does not divide perfectly the dimension of
-    // the input tensor.
+    // the input tensor. If a given dimension or a tile associated with it is
+    // dynamic, the dimension is not considered as we don't have enough static
+    // information to understand if the tile perfectly divides that dimension.
     static bool requirePaddingValue(ArrayRef<int64_t> inputShape,
                                     ArrayRef<int64_t> innerDimsPos,
                                     ArrayRef<OpFoldResult> innerTiles);
@@ -1856,6 +1869,8 @@ def Tensor_PackOp : Tensor_RelayoutOp<"pack", [
   }];
 
   let hasCanonicalizeMethod = 1;
+
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1937,6 +1952,8 @@ def Tensor_UnPackOp : Tensor_RelayoutOp<"unpack"> {
   }];
 
   let hasCanonicalizeMethod = 1;
+
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//

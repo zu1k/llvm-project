@@ -11,10 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ExecutionEngine/JITLink/ELF_riscv.h"
+#include "EHFrameSupportImpl.h"
 #include "ELFLinkGraphBuilder.h"
 #include "JITLinkGeneric.h"
 #include "PerGraphGOTAndPLTStubsBuilder.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/ExecutionEngine/JITLink/DWARFRecordSectionSplitter.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "llvm/ExecutionEngine/JITLink/riscv.h"
 #include "llvm/Object/ELF.h"
@@ -233,6 +235,8 @@ private:
           (RawInstr & 0xFFF) | Imm20 | Imm10_1 | Imm11 | Imm19_12;
       break;
     }
+    case CallRelaxable:
+      // Treat as R_RISCV_CALL when the relaxation pass did not run
     case R_RISCV_CALL_PLT:
     case R_RISCV_CALL: {
       int64_t Value = E.getTarget().getAddress() + E.getAddend() - FixupAddress;
@@ -451,6 +455,16 @@ private:
       *(little32_t *)FixupPtr = Word32;
       break;
     }
+    case AlignRelaxable:
+      // Ignore when the relaxation pass did not run
+      break;
+    case NegDelta32: {
+      int64_t Value = FixupAddress - E.getTarget().getAddress() + E.getAddend();
+      if (LLVM_UNLIKELY(!isInRangeForImm(Value, 32)))
+        return makeTargetOutOfRangeError(G, B, E);
+      *(little32_t *)FixupPtr = static_cast<uint32_t>(Value);
+      break;
+    }
     }
     return Error::success();
   }
@@ -510,9 +524,8 @@ static bool isRelaxable(const Edge &E) {
 static RelaxAux initRelaxAux(LinkGraph &G) {
   RelaxAux Aux;
   Aux.Config.IsRV32 = G.getTargetTriple().isRISCV32();
-  const auto &Features = G.getFeatures();
-  Aux.Config.HasRVC =
-      std::find(Features.begin(), Features.end(), "+c") != Features.end();
+  const auto &Features = G.getFeatures().getFeatures();
+  Aux.Config.HasRVC = llvm::is_contained(Features, "+c");
 
   for (auto &S : G.sections()) {
     if (!shouldRelax(S))
@@ -723,25 +736,27 @@ static void finalizeBlockRelax(LinkGraph &G, Block &Block, BlockRelaxAux &Aux) {
 
   // Fixup edge offsets and kinds.
   Delta = 0;
-  for (auto [I, E] : llvm::enumerate(Aux.RelaxEdges)) {
-    E->setOffset(E->getOffset() - Delta);
+  size_t I = 0;
+  for (auto &E : Block.edges()) {
+    E.setOffset(E.getOffset() - Delta);
 
-    if (Aux.EdgeKinds[I] != Edge::Invalid)
-      E->setKind(Aux.EdgeKinds[I]);
+    if (I < Aux.RelaxEdges.size() && Aux.RelaxEdges[I] == &E) {
+      if (Aux.EdgeKinds[I] != Edge::Invalid)
+        E.setKind(Aux.EdgeKinds[I]);
 
-    Delta = Aux.RelocDeltas[I];
+      Delta = Aux.RelocDeltas[I];
+      ++I;
+    }
   }
 
   // Remove AlignRelaxable edges: all other relaxable edges got modified and
   // will be used later while linking. Alignment is entirely handled here so we
   // don't need these edges anymore.
-  for (auto *B : G.blocks()) {
-    for (auto IE = B->edges().begin(); IE != B->edges().end();) {
-      if (IE->getKind() == AlignRelaxable)
-        IE = B->removeEdge(IE);
-      else
-        ++IE;
-    }
+  for (auto IE = Block.edges().begin(); IE != Block.edges().end();) {
+    if (IE->getKind() == AlignRelaxable)
+      IE = Block.removeEdge(IE);
+    else
+      ++IE;
   }
 }
 
@@ -910,7 +925,7 @@ private:
 public:
   ELFLinkGraphBuilder_riscv(StringRef FileName,
                             const object::ELFFile<ELFT> &Obj, Triple TT,
-                            LinkGraph::FeatureVector Features)
+                            SubtargetFeatures Features)
       : ELFLinkGraphBuilder<ELFT>(Obj, std::move(TT), std::move(Features),
                                   FileName, riscv::getEdgeKindName) {}
 };
@@ -934,7 +949,7 @@ createLinkGraphFromELFObject_riscv(MemoryBufferRef ObjectBuffer) {
     auto &ELFObjFile = cast<object::ELFObjectFile<object::ELF64LE>>(**ELFObj);
     return ELFLinkGraphBuilder_riscv<object::ELF64LE>(
                (*ELFObj)->getFileName(), ELFObjFile.getELFFile(),
-               (*ELFObj)->makeTriple(), Features->getFeatures())
+               (*ELFObj)->makeTriple(), std::move(*Features))
         .buildGraph();
   } else {
     assert((*ELFObj)->getArch() == Triple::riscv32 &&
@@ -942,7 +957,7 @@ createLinkGraphFromELFObject_riscv(MemoryBufferRef ObjectBuffer) {
     auto &ELFObjFile = cast<object::ELFObjectFile<object::ELF32LE>>(**ELFObj);
     return ELFLinkGraphBuilder_riscv<object::ELF32LE>(
                (*ELFObj)->getFileName(), ELFObjFile.getELFFile(),
-               (*ELFObj)->makeTriple(), Features->getFeatures())
+               (*ELFObj)->makeTriple(), std::move(*Features))
         .buildGraph();
   }
 }
@@ -952,19 +967,28 @@ void link_ELF_riscv(std::unique_ptr<LinkGraph> G,
   PassConfiguration Config;
   const Triple &TT = G->getTargetTriple();
   if (Ctx->shouldAddDefaultTargetPasses(TT)) {
+
+    Config.PrePrunePasses.push_back(DWARFRecordSectionSplitter(".eh_frame"));
+    Config.PrePrunePasses.push_back(EHFrameEdgeFixer(
+        ".eh_frame", G->getPointerSize(), Edge::Invalid, Edge::Invalid,
+        Edge::Invalid, Edge::Invalid, NegDelta32));
+    Config.PrePrunePasses.push_back(EHFrameNullTerminator(".eh_frame"));
+
     if (auto MarkLive = Ctx->getMarkLivePass(TT))
       Config.PrePrunePasses.push_back(std::move(MarkLive));
     else
       Config.PrePrunePasses.push_back(markAllSymbolsLive);
     Config.PostPrunePasses.push_back(
         PerGraphGOTAndPLTStubsBuilder_ELF_riscv::asPass);
-    Config.PreFixupPasses.push_back(relax);
+    Config.PostAllocationPasses.push_back(relax);
   }
   if (auto Err = Ctx->modifyPassConfig(*G, Config))
     return Ctx->notifyFailed(std::move(Err));
 
   ELFJITLinker_riscv::link(std::move(Ctx), std::move(G), std::move(Config));
 }
+
+LinkGraphPassFunction createRelaxationPass_ELF_riscv() { return relax; }
 
 } // namespace jitlink
 } // namespace llvm

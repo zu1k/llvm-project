@@ -11,8 +11,8 @@
 // This version runs the test when the platform has Unicode support.
 // UNSUPPORTED: libcpp-has-no-unicode
 
-// TODO FMT Investigate Windows and 32-bit AIX issues.
-// UNSUPPORTED: msvc, target={{.+}}-windows-gnu, target=powerpc-ibm-aix{{.*}}
+// TODO FMT Investigate Windows issues.
+// UNSUPPORTED: msvc, target={{.+}}-windows-gnu
 
 // TODO FMT This test should not require std::to_chars(floating-point)
 // XFAIL: availability-fp_to_chars-missing
@@ -501,6 +501,12 @@ static void test_ill_formed_utf8() {
               "\xf7\xbf\xbf"
               "a");
 
+  test_format(R"("a\x{f1}\x{80}\x{80}\x{e1}\x{80}\x{c2}b")"sv,
+              "{:?}",
+              "a"
+              "\xf1\x80\x80\xe1\x80\xc2"
+              "b");
+
   // Code unit out of range
   test_format(R"("\u{10ffff}")"sv, "{:?}", "\xf4\x8f\xbf\xbf");               // last valid code point
   test_format(R"("\x{f4}\x{90}\x{80}\x{80}")"sv, "{:?}", "\xf4\x90\x80\x80"); // first invalid code point
@@ -559,7 +565,6 @@ int main(int, char**) {
 #ifndef TEST_HAS_NO_WIDE_CHARACTERS
 #  ifdef _LIBCPP_SHORT_WCHAR
   test_ill_formed_utf16();
-  assert(false);
 #  else  // _LIBCPP_SHORT_WCHAR
   test_ill_formed_utf32();
 #  endif // _LIBCPP_SHORT_WCHAR

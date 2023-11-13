@@ -268,6 +268,9 @@ public:
   /// Return which operand this is in the OpOperand list of the Operation.
   unsigned getOperandNumber();
 
+  /// Set the current value being used by this operand.
+  void assign(Value value) { set(value); }
+
 private:
   /// Keep the constructor private and accessible to the OperandStorage class
   /// only to avoid hard-to-debug typo/programming mistakes.
@@ -529,6 +532,18 @@ struct DenseMapInfo<mlir::OpResult> : public DenseMapInfo<mlir::Value> {
     return reinterpret_cast<mlir::detail::OpResultImpl *>(pointer);
   }
 };
+template <typename T>
+struct DenseMapInfo<mlir::detail::TypedValue<T>>
+    : public DenseMapInfo<mlir::Value> {
+  static mlir::detail::TypedValue<T> getEmptyKey() {
+    void *pointer = llvm::DenseMapInfo<void *>::getEmptyKey();
+    return reinterpret_cast<mlir::detail::ValueImpl *>(pointer);
+  }
+  static mlir::detail::TypedValue<T> getTombstoneKey() {
+    void *pointer = llvm::DenseMapInfo<void *>::getTombstoneKey();
+    return reinterpret_cast<mlir::detail::ValueImpl *>(pointer);
+  }
+};
 
 /// Allow stealing the low bits of a value.
 template <>
@@ -561,6 +576,14 @@ public:
     return reinterpret_cast<mlir::detail::OpResultImpl *>(pointer);
   }
 };
+template <typename T>
+struct PointerLikeTypeTraits<mlir::detail::TypedValue<T>>
+    : public PointerLikeTypeTraits<mlir::Value> {
+public:
+  static inline mlir::detail::TypedValue<T> getFromVoidPointer(void *pointer) {
+    return reinterpret_cast<mlir::detail::ValueImpl *>(pointer);
+  }
+};
 
 /// Add support for llvm style casts. We provide a cast between To and From if
 /// From is mlir::Value or derives from it.
@@ -582,7 +605,6 @@ struct CastInfo<
     /// Return a constant true instead of a dynamic true when casting to self or
     /// up the hierarchy.
     if constexpr (std::is_base_of_v<To, From>) {
-      (void)ty;
       return true;
     } else {
       return To::classof(ty);

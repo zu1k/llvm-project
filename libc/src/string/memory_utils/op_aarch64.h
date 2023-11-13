@@ -24,9 +24,9 @@
 #include <arm_neon.h>
 #endif //__ARM_NEON
 
-namespace __llvm_libc::aarch64 {
+namespace LIBC_NAMESPACE::aarch64 {
 
-static inline constexpr bool kNeon = LLVM_LIBC_IS_DEFINED(__ARM_NEON);
+LIBC_INLINE_VAR constexpr bool kNeon = LLVM_LIBC_IS_DEFINED(__ARM_NEON);
 
 namespace neon {
 
@@ -52,7 +52,7 @@ struct BzeroCacheLine {
   }
 };
 
-LIBC_INLINE static bool hasZva() {
+LIBC_INLINE bool hasZva() {
   uint64_t zva_val;
   asm("mrs %[zva_val], dczid_el0" : [zva_val] "=r"(zva_val));
   // DC ZVA is permitted if DZP, bit [4] is zero.
@@ -169,9 +169,9 @@ template <size_t Size> struct Bcmp {
   }
 };
 
-} // namespace __llvm_libc::aarch64
+} // namespace LIBC_NAMESPACE::aarch64
 
-namespace __llvm_libc::generic {
+namespace LIBC_NAMESPACE::generic {
 
 ///////////////////////////////////////////////////////////////////////////////
 // Specializations for uint16_t
@@ -263,7 +263,7 @@ LIBC_INLINE MemcmpReturnType cmp<uint8x16x2_t>(CPtr p1, CPtr p2,
   }
   return MemcmpReturnType::ZERO();
 }
-} // namespace __llvm_libc::generic
+} // namespace LIBC_NAMESPACE::generic
 
 #endif // LIBC_TARGET_ARCH_IS_AARCH64
 

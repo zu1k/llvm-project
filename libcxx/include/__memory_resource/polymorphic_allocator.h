@@ -10,13 +10,13 @@
 #define _LIBCPP___MEMORY_RESOURCE_POLYMORPHIC_ALLOCATOR_H
 
 #include <__assert>
+#include <__availability>
 #include <__config>
 #include <__memory_resource/memory_resource.h>
 #include <__utility/exception_guard.h>
 #include <cstddef>
 #include <limits>
 #include <new>
-#include <stdexcept>
 #include <tuple>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
@@ -39,7 +39,7 @@ template <class _ValueType
           = byte
 #  endif
           >
-class _LIBCPP_TEMPLATE_VIS polymorphic_allocator {
+class _LIBCPP_AVAILABILITY_PMR _LIBCPP_TEMPLATE_VIS polymorphic_allocator {
 
 public:
   using value_type = _ValueType;
@@ -68,7 +68,7 @@ public:
   }
 
   _LIBCPP_HIDE_FROM_ABI void deallocate(_ValueType* __p, size_t __n) {
-    _LIBCPP_ASSERT(__n <= __max_size(), "deallocate called for size which exceeds max_size()");
+    _LIBCPP_ASSERT_UNCATEGORIZED(__n <= __max_size(), "deallocate called for size which exceeds max_size()");
     __res_->deallocate(__p, __n * sizeof(_ValueType), alignof(_ValueType));
   }
 

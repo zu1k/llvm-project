@@ -57,6 +57,10 @@ enum NodeType : unsigned {
   MUL_WIDE_UNSIGNED,
   IMAD,
   SETP_F16X2,
+  SETP_BF16X2,
+  BFE,
+  BFI,
+  PRMT,
   Dummy,
 
   LoadV2 = ISD::FIRST_TARGET_MEMORY_OPCODE,
@@ -520,7 +524,7 @@ public:
                       const SmallVectorImpl<SDValue> &OutVals, const SDLoc &dl,
                       SelectionDAG &DAG) const override;
 
-  void LowerAsmOperandForConstraint(SDValue Op, std::string &Constraint,
+  void LowerAsmOperandForConstraint(SDValue Op, StringRef Constraint,
                                     std::vector<SDValue> &Ops,
                                     SelectionDAG &DAG) const override;
 
@@ -556,7 +560,7 @@ public:
 
   unsigned combineRepeatedFPDivisors() const override { return 2; }
 
-  bool allowFMA(MachineFunction &MF, CodeGenOpt::Level OptLevel) const;
+  bool allowFMA(MachineFunction &MF, CodeGenOptLevel OptLevel) const;
   bool allowUnsafeFPMath(MachineFunction &MF) const;
 
   bool isFMAFasterThanFMulAndFAdd(const MachineFunction &MF,
@@ -572,17 +576,6 @@ public:
   // instruction, so we say that ctlz is cheap to speculate.
   bool isCheapToSpeculateCtlz(Type *Ty) const override { return true; }
 
-  EVT getOptimalMemOpType(const MemOp &Op,
-                          const AttributeList &FuncAttributes) const override {
-    return (Op.size() >= 16 && Op.isDstAligned(Align(16))) ? MVT::v4i32
-                                                           : MVT::Other;
-  }
-
-  EVT getTypeToTransformTo(LLVMContext &Context, EVT VT) const override {
-    if (VT == MVT::v4i32)
-      return VT;
-    return TargetLoweringBase::getTypeToTransformTo(Context, VT);
-  }
   AtomicExpansionKind shouldCastAtomicLoadInIR(LoadInst *LI) const override {
     return AtomicExpansionKind::None;
   }
@@ -594,6 +587,12 @@ public:
   AtomicExpansionKind
   shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const override;
 
+  bool aggressivelyPreferBuildVectorSources(EVT VecVT) const override {
+    // There's rarely any point of packing something into a vector type if we
+    // already have the source data.
+    return true;
+  }
+
 private:
   const NVPTXSubtarget &STI; // cache the subtarget here
   SDValue getParamSymbol(SelectionDAG &DAG, int idx, EVT) const;
@@ -601,6 +600,8 @@ private:
   SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerCONCAT_VECTORS(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerINSERT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const;
 
   SDValue LowerFROUND(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFROUND32(SDValue Op, SelectionDAG &DAG) const;
@@ -628,6 +629,7 @@ private:
   Align getArgumentAlignment(SDValue Callee, const CallBase *CB, Type *Ty,
                              unsigned Idx, const DataLayout &DL) const;
 };
+
 } // namespace llvm
 
 #endif

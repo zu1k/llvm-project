@@ -53,7 +53,7 @@ def int_r600_group_barrier : ClangBuiltin<"__builtin_r600_group_barrier">,
 // AS 7 is PARAM_I_ADDRESS, used for kernel arguments
 def int_r600_implicitarg_ptr :
   ClangBuiltin<"__builtin_r600_implicitarg_ptr">,
-  DefaultAttrsIntrinsic<[LLVMQualPointerType<llvm_i8_ty, 7>], [],
+  DefaultAttrsIntrinsic<[LLVMQualPointerType<7>], [],
   [IntrNoMem, IntrSpeculatable]>;
 
 def int_r600_rat_store_typed :
@@ -141,22 +141,22 @@ defm int_amdgcn_workgroup_id : AMDGPUReadPreloadRegisterIntrinsic_xyz_named
                                <"__builtin_amdgcn_workgroup_id">;
 
 def int_amdgcn_dispatch_ptr :
-  DefaultAttrsIntrinsic<[LLVMQualPointerType<llvm_i8_ty, 4>], [],
+  DefaultAttrsIntrinsic<[LLVMQualPointerType<4>], [],
   [Align<RetIndex, 4>, IntrNoMem, IntrSpeculatable]>;
 
 def int_amdgcn_queue_ptr :
   ClangBuiltin<"__builtin_amdgcn_queue_ptr">,
-  DefaultAttrsIntrinsic<[LLVMQualPointerType<llvm_i8_ty, 4>], [],
+  DefaultAttrsIntrinsic<[LLVMQualPointerType<4>], [],
   [Align<RetIndex, 4>, IntrNoMem, IntrSpeculatable]>;
 
 def int_amdgcn_kernarg_segment_ptr :
   ClangBuiltin<"__builtin_amdgcn_kernarg_segment_ptr">,
-  DefaultAttrsIntrinsic<[LLVMQualPointerType<llvm_i8_ty, 4>], [],
+  DefaultAttrsIntrinsic<[LLVMQualPointerType<4>], [],
   [Align<RetIndex, 4>, IntrNoMem, IntrSpeculatable]>;
 
 def int_amdgcn_implicitarg_ptr :
   ClangBuiltin<"__builtin_amdgcn_implicitarg_ptr">,
-  DefaultAttrsIntrinsic<[LLVMQualPointerType<llvm_i8_ty, 4>], [],
+  DefaultAttrsIntrinsic<[LLVMQualPointerType<4>], [],
   [Align<RetIndex, 4>, IntrNoMem, IntrSpeculatable]>;
 
 def int_amdgcn_groupstaticsize :
@@ -173,7 +173,7 @@ def int_amdgcn_lds_kernel_id :
 
 def int_amdgcn_implicit_buffer_ptr :
   ClangBuiltin<"__builtin_amdgcn_implicit_buffer_ptr">,
-  DefaultAttrsIntrinsic<[LLVMQualPointerType<llvm_i8_ty, 4>], [],
+  DefaultAttrsIntrinsic<[LLVMQualPointerType<4>], [],
   [Align<RetIndex, 4>, IntrNoMem, IntrSpeculatable]>;
 
 // Set EXEC to the 64-bit value given.
@@ -302,9 +302,18 @@ def int_amdgcn_cos : DefaultAttrsIntrinsic<
 
 // v_log_{f16|f32}, performs log2. f32 version does not handle
 // denormals. There is no reason to use this for f16 as it does
-// support denormals, and the generic log intrinsic should be
+// support denormals, and the generic log2 intrinsic should be
 // preferred.
 def int_amdgcn_log : DefaultAttrsIntrinsic<
+  [llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrNoMem, IntrSpeculatable]
+>;
+
+// v_exp_{f16|f32} (int_amdgcn_exp was taken by export
+// already). Performs exp2. f32 version does not handle
+// denormals. There is no reason to use this for f16 as it does
+// support denormals, and the generic exp2 intrinsic should be
+// preferred.
+def int_amdgcn_exp2 : DefaultAttrsIntrinsic<
   [llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrNoMem, IntrSpeculatable]
 >;
 
@@ -352,12 +361,6 @@ def int_amdgcn_rsq_legacy :  ClangBuiltin<"__builtin_amdgcn_rsq_legacy">,
 // out = 1.0 / sqrt(a) result clamped to +/- max_float.
 def int_amdgcn_rsq_clamp : DefaultAttrsIntrinsic<
   [llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrNoMem, IntrSpeculatable]>;
-
-// For int_amdgcn_ldexp_f16, only the low 16 bits of the i32 src1 operand will used.
-def int_amdgcn_ldexp : DefaultAttrsIntrinsic<
-  [llvm_anyfloat_ty], [LLVMMatchType<0>, llvm_i32_ty],
-  [IntrNoMem, IntrSpeculatable]
->;
 
 def int_amdgcn_frexp_mant : DefaultAttrsIntrinsic<
   [llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrNoMem, IntrSpeculatable]
@@ -452,24 +455,9 @@ def int_amdgcn_fmad_ftz :
             [IntrNoMem, IntrSpeculatable]
 >;
 
-// Fields should mirror atomicrmw
-class AMDGPUAtomicIncIntrin : Intrinsic<[llvm_anyint_ty],
-  [llvm_anyptr_ty,
-  LLVMMatchType<0>,
-  llvm_i32_ty, // ordering
-  llvm_i32_ty, // scope
-  llvm_i1_ty], // isVolatile
-  [IntrArgMemOnly, IntrWillReturn, NoCapture<ArgIndex<0>>,
-   ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>, IntrNoCallback, IntrNoFree], "",
-  [SDNPMemOperand]
->;
-
-def int_amdgcn_atomic_inc : AMDGPUAtomicIncIntrin;
-def int_amdgcn_atomic_dec : AMDGPUAtomicIncIntrin;
-
 class AMDGPULDSIntrin :
   Intrinsic<[llvm_any_ty],
-    [LLVMQualPointerType<LLVMMatchType<0>, 3>,
+    [LLVMQualPointerType<3>,
     LLVMMatchType<0>,
     llvm_i32_ty, // ordering
     llvm_i32_ty, // scope
@@ -483,7 +471,7 @@ class AMDGPUDSOrderedIntrinsic : Intrinsic<
   [llvm_i32_ty],
   // M0 = {hi16:address, lo16:waveID}. Allow passing M0 as a pointer, so that
   // the bit packing can be optimized at the IR level.
-  [LLVMQualPointerType<llvm_i32_ty, 2>, // IntToPtr(M0)
+  [LLVMQualPointerType<2>, // IntToPtr(M0)
    llvm_i32_ty, // value to add or swap
    llvm_i32_ty, // ordering
    llvm_i32_ty, // scope
@@ -1000,19 +988,18 @@ defset list<AMDGPUImageDimIntrinsic> AMDGPUImageDimAtomicIntrinsics = {
 
 // Data type for buffer resources (V#). Maybe, in the future, we can create a
 // similar one for textures (T#).
-class AMDGPUBufferRsrcTy<LLVMType data_ty = llvm_any_ty>
-  : LLVMQualPointerType<data_ty, 8>;
+def AMDGPUBufferRsrcTy : LLVMQualPointerType<8>;
 
 let TargetPrefix = "amdgcn" in {
 
 def int_amdgcn_make_buffer_rsrc : DefaultAttrsIntrinsic <
-  [AMDGPUBufferRsrcTy<llvm_i8_ty>],
+  [AMDGPUBufferRsrcTy],
   [llvm_anyptr_ty, // base
    llvm_i16_ty,    // stride (and swizzle control)
    llvm_i32_ty,    // NumRecords / extent
    llvm_i32_ty],   // flags
   // Attributes lifted from ptrmask + some extra argument attributes.
-  [IntrNoMem, NoCapture<ArgIndex<0>>, ReadNone<ArgIndex<0>>,
+  [IntrNoMem, ReadNone<ArgIndex<0>>,
    IntrSpeculatable, IntrWillReturn]>;
 
 defset list<AMDGPURsrcIntrinsic> AMDGPUBufferIntrinsics = {
@@ -1079,7 +1066,7 @@ def int_amdgcn_raw_buffer_load : AMDGPURawBufferLoad;
 
 class AMDGPURawPtrBufferLoad<LLVMType data_ty = llvm_any_ty> : DefaultAttrsIntrinsic <
   [data_ty],
-  [AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+  [AMDGPUBufferRsrcTy,         // rsrc(SGPR)
    llvm_i32_ty,                 // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,                 // soffset(SGPR/imm, excluded from bounds checking and swizzling)
    llvm_i32_ty],                // auxiliary data (imm, cachepolicy (bit 0 = glc,
@@ -1109,7 +1096,7 @@ def int_amdgcn_struct_buffer_load : AMDGPUStructBufferLoad;
 
 class AMDGPUStructPtrBufferLoad<LLVMType data_ty = llvm_any_ty> : DefaultAttrsIntrinsic <
   [data_ty],
-  [AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+  [AMDGPUBufferRsrcTy,          // rsrc(SGPR)
    llvm_i32_ty,                 // vindex(VGPR)
    llvm_i32_ty,                 // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,                 // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1141,7 +1128,7 @@ def int_amdgcn_raw_buffer_store : AMDGPURawBufferStore;
 class AMDGPURawPtrBufferStore<LLVMType data_ty = llvm_any_ty> : DefaultAttrsIntrinsic <
   [],
   [data_ty,                     // vdata(VGPR)
-   AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+   AMDGPUBufferRsrcTy,          // rsrc(SGPR)
    llvm_i32_ty,                 // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,                 // soffset(SGPR/imm, excluded from bounds checking and swizzling)
    llvm_i32_ty],                // auxiliary data (imm, cachepolicy (bit 0 = glc,
@@ -1173,7 +1160,7 @@ def int_amdgcn_struct_buffer_store : AMDGPUStructBufferStore;
 class AMDGPUStructPtrBufferStore<LLVMType data_ty = llvm_any_ty> : DefaultAttrsIntrinsic <
   [],
   [data_ty,                     // vdata(VGPR)
-   AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+   AMDGPUBufferRsrcTy,          // rsrc(SGPR)
    llvm_i32_ty,                 // vindex(VGPR)
    llvm_i32_ty,                 // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,                 // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1187,9 +1174,9 @@ class AMDGPUStructPtrBufferStore<LLVMType data_ty = llvm_any_ty> : DefaultAttrsI
 def int_amdgcn_struct_ptr_buffer_store_format : AMDGPUStructPtrBufferStore;
 def int_amdgcn_struct_ptr_buffer_store : AMDGPUStructPtrBufferStore;
 
-class AMDGPURawBufferAtomic<LLVMType data_ty = llvm_any_ty, bit NoRtn = false> : Intrinsic <
-  !if(NoRtn, [], [data_ty]),
-  [!if(NoRtn, data_ty, LLVMMatchType<0>),  // vdata(VGPR)
+class AMDGPURawBufferAtomic<LLVMType data_ty = llvm_any_ty> : Intrinsic <
+  [data_ty],
+  [LLVMMatchType<0>,  // vdata(VGPR)
    llvm_v4i32_ty,     // rsrc(SGPR)
    llvm_i32_ty,       // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,       // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1221,10 +1208,10 @@ def int_amdgcn_raw_buffer_atomic_cmpswap : Intrinsic<
   [ImmArg<ArgIndex<5>>, IntrWillReturn, IntrNoCallback, IntrNoFree], "", [SDNPMemOperand]>,
   AMDGPURsrcIntrinsic<2, 0>;
 
-class AMDGPURawPtrBufferAtomic<LLVMType data_ty = llvm_any_ty, bit NoRtn = false> : Intrinsic <
-  !if(NoRtn, [], [data_ty]),
-  [!if(NoRtn, data_ty, LLVMMatchType<0>),  // vdata(VGPR)
-   AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+class AMDGPURawPtrBufferAtomic<LLVMType data_ty = llvm_any_ty> : Intrinsic <
+  [data_ty],
+  [LLVMMatchType<0>,            // vdata(VGPR)
+   AMDGPUBufferRsrcTy,          // rsrc(SGPR)
    llvm_i32_ty,                 // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,                 // soffset(SGPR/imm, excluded from bounds checking and swizzling)
    llvm_i32_ty],                // cachepolicy(imm; bit 1 = slc)
@@ -1250,7 +1237,7 @@ def int_amdgcn_raw_ptr_buffer_atomic_cmpswap : Intrinsic<
   [llvm_anyint_ty],
   [LLVMMatchType<0>,  // src(VGPR)
    LLVMMatchType<0>,  // cmp(VGPR)
-   AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+   AMDGPUBufferRsrcTy, // rsrc(SGPR)
    llvm_i32_ty,       // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,       // soffset(SGPR/imm, excluded from bounds checking and swizzling)
    llvm_i32_ty],      // cachepolicy(imm; bit 1 = slc)
@@ -1262,9 +1249,9 @@ def int_amdgcn_raw_ptr_buffer_atomic_cmpswap : Intrinsic<
 def int_amdgcn_raw_buffer_atomic_fadd : AMDGPURawBufferAtomic<llvm_anyfloat_ty>;
 def int_amdgcn_raw_ptr_buffer_atomic_fadd : AMDGPURawPtrBufferAtomic<llvm_anyfloat_ty>;
 
-class AMDGPUStructBufferAtomic<LLVMType data_ty = llvm_any_ty, bit NoRtn = false> : Intrinsic <
-  !if(NoRtn, [], [data_ty]),
-  [!if(NoRtn, data_ty, LLVMMatchType<0>),  // vdata(VGPR)
+class AMDGPUStructBufferAtomic<LLVMType data_ty = llvm_any_ty> : Intrinsic <
+  [data_ty],
+  [LLVMMatchType<0>,  // vdata(VGPR)
    llvm_v4i32_ty,     // rsrc(SGPR)
    llvm_i32_ty,       // vindex(VGPR)
    llvm_i32_ty,       // offset(VGPR/imm, included in bounds checking and swizzling)
@@ -1296,10 +1283,10 @@ def int_amdgcn_struct_buffer_atomic_cmpswap : Intrinsic<
   [ImmArg<ArgIndex<6>>, IntrWillReturn, IntrNoCallback, IntrNoFree], "", [SDNPMemOperand]>,
   AMDGPURsrcIntrinsic<2, 0>;
 
-class AMDGPUStructPtrBufferAtomic<LLVMType data_ty = llvm_any_ty, bit NoRtn = false> : Intrinsic <
-  !if(NoRtn, [], [data_ty]),
-  [!if(NoRtn, data_ty, LLVMMatchType<0>),  // vdata(VGPR)
-   AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+class AMDGPUStructPtrBufferAtomic<LLVMType data_ty = llvm_any_ty> : Intrinsic <
+  [data_ty],
+  [LLVMMatchType<0>,            // vdata(VGPR)
+   AMDGPUBufferRsrcTy,          // rsrc(SGPR)
    llvm_i32_ty,                 // vindex(VGPR)
    llvm_i32_ty,                 // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,                 // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1323,7 +1310,7 @@ def int_amdgcn_struct_ptr_buffer_atomic_cmpswap : Intrinsic<
   [llvm_anyint_ty],
   [LLVMMatchType<0>,  // src(VGPR)
    LLVMMatchType<0>,  // cmp(VGPR)
-   AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+   AMDGPUBufferRsrcTy, // rsrc(SGPR)
    llvm_i32_ty,       // vindex(VGPR)
    llvm_i32_ty,       // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,       // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1397,7 +1384,7 @@ def int_amdgcn_raw_tbuffer_load : DefaultAttrsIntrinsic <
 
 def int_amdgcn_raw_ptr_tbuffer_load : DefaultAttrsIntrinsic <
     [llvm_any_ty],      // overloaded for types f32/i32, v2f32/v2i32, v4f32/v4i32
-    [AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+    [AMDGPUBufferRsrcTy, // rsrc(SGPR)
      llvm_i32_ty,     // offset(VGPR/imm, included in bounds` checking and swizzling)
      llvm_i32_ty,     // soffset(SGPR/imm, excluded from bounds checking and swizzling)
      llvm_i32_ty,     // format(imm; bits 3..0 = dfmt, bits 6..4 = nfmt)
@@ -1427,7 +1414,7 @@ def int_amdgcn_raw_tbuffer_store : DefaultAttrsIntrinsic <
 def int_amdgcn_raw_ptr_tbuffer_store : DefaultAttrsIntrinsic <
     [],
     [llvm_any_ty,    // vdata(VGPR), overloaded for types f32/i32, v2f32/v2i32, v4f32/v4i32
-     AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+     AMDGPUBufferRsrcTy, // rsrc(SGPR)
      llvm_i32_ty,    // offset(VGPR/imm, included in bounds checking and swizzling)
      llvm_i32_ty,    // soffset(SGPR/imm, excluded from bounds checking and swizzling)
      llvm_i32_ty,    // format(imm; bits 3..0 = dfmt, bits 6..4 = nfmt)
@@ -1456,7 +1443,7 @@ def int_amdgcn_struct_tbuffer_load : DefaultAttrsIntrinsic <
 
 def int_amdgcn_struct_ptr_tbuffer_load : DefaultAttrsIntrinsic <
     [llvm_any_ty],    // overloaded for types f32/i32, v2f32/v2i32, v4f32/v4i32
-    [AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+    [AMDGPUBufferRsrcTy, // rsrc(SGPR)
      llvm_i32_ty,     // vindex(VGPR)
      llvm_i32_ty,     // offset(VGPR/imm, included in bounds checking and swizzling)
      llvm_i32_ty,     // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1472,7 +1459,7 @@ def int_amdgcn_struct_ptr_tbuffer_load : DefaultAttrsIntrinsic <
 def int_amdgcn_struct_ptr_tbuffer_store : DefaultAttrsIntrinsic <
     [],
     [llvm_any_ty,    // vdata(VGPR), overloaded for types f32/i32, v2f32/v2i32, v4f32/v4i32
-     AMDGPUBufferRsrcTy<LLVMMatchType<0>>, // rsrc(SGPR)
+     AMDGPUBufferRsrcTy, // rsrc(SGPR)
      llvm_i32_ty,    // vindex(VGPR)
      llvm_i32_ty,    // offset(VGPR/imm, included in bounds checking and swizzling)
      llvm_i32_ty,    // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1549,7 +1536,7 @@ def int_amdgcn_buffer_atomic_fadd : AMDGPUBufferAtomicFP;
 class AMDGPURawBufferLoadLDS : Intrinsic <
   [],
   [llvm_v4i32_ty,                      // rsrc(SGPR)
-   LLVMQualPointerType<llvm_i8_ty, 3>, // LDS base offset
+   LLVMQualPointerType<3>,             // LDS base offset
    llvm_i32_ty,                        // Data byte size: 1/2/4
    llvm_i32_ty,                        // voffset(VGPR, included in bounds checking and swizzling)
    llvm_i32_ty,                        // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1564,8 +1551,8 @@ def int_amdgcn_raw_buffer_load_lds : AMDGPURawBufferLoadLDS;
 
 class AMDGPURawPtrBufferLoadLDS : Intrinsic <
   [],
-  [AMDGPUBufferRsrcTy<llvm_i8_ty>,     // rsrc(SGPR)
-   LLVMQualPointerType<llvm_i8_ty, 3>, // LDS base offset
+  [AMDGPUBufferRsrcTy,                 // rsrc(SGPR)
+   LLVMQualPointerType<3>,             // LDS base offset
    llvm_i32_ty,                        // Data byte size: 1/2/4
    llvm_i32_ty,                        // voffset(VGPR, included in bounds checking and swizzling)
    llvm_i32_ty,                        // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1584,7 +1571,7 @@ def int_amdgcn_raw_ptr_buffer_load_lds : AMDGPURawPtrBufferLoadLDS;
 class AMDGPUStructBufferLoadLDS : Intrinsic <
   [],
   [llvm_v4i32_ty,                      // rsrc(SGPR)
-   LLVMQualPointerType<llvm_i8_ty, 3>, // LDS base offset
+   LLVMQualPointerType<3>,             // LDS base offset
    llvm_i32_ty,                        // Data byte size: 1/2/4
    llvm_i32_ty,                        // vindex(VGPR)
    llvm_i32_ty,                        // voffset(VGPR, included in bounds checking and swizzling)
@@ -1600,8 +1587,8 @@ def int_amdgcn_struct_buffer_load_lds : AMDGPUStructBufferLoadLDS;
 
 class AMDGPUStructPtrBufferLoadLDS : Intrinsic <
   [],
-  [AMDGPUBufferRsrcTy<llvm_i8_ty>,     // rsrc(SGPR)
-   LLVMQualPointerType<llvm_i8_ty, 3>, // LDS base offset
+  [AMDGPUBufferRsrcTy,                 // rsrc(SGPR)
+   LLVMQualPointerType<3> ,            // LDS base offset
    llvm_i32_ty,                        // Data byte size: 1/2/4
    llvm_i32_ty,                        // vindex(VGPR)
    llvm_i32_ty,                        // voffset(VGPR, included in bounds checking and swizzling)
@@ -1684,6 +1671,11 @@ def int_amdgcn_s_sleep :
                                 IntrHasSideEffects]> {
 }
 
+def int_amdgcn_s_nop :
+  DefaultAttrsIntrinsic<[], [llvm_i16_ty], [ImmArg<ArgIndex<0>>, IntrNoMem,
+                                IntrHasSideEffects]> {
+}
+
 def int_amdgcn_s_incperflevel :
   ClangBuiltin<"__builtin_amdgcn_s_incperflevel">,
   DefaultAttrsIntrinsic<[], [llvm_i32_ty], [ImmArg<ArgIndex<0>>, IntrNoMem,
@@ -1704,6 +1696,13 @@ def int_amdgcn_s_setprio :
   ClangBuiltin<"__builtin_amdgcn_s_setprio">,
   DefaultAttrsIntrinsic<[], [llvm_i16_ty], [ImmArg<ArgIndex<0>>, IntrNoMem,
                                 IntrHasSideEffects]>;
+
+def int_amdgcn_s_ttracedata :
+  DefaultAttrsIntrinsic<[], [llvm_i32_ty],
+                        [IntrNoMem, IntrHasSideEffects]>;
+def int_amdgcn_s_ttracedata_imm :
+  DefaultAttrsIntrinsic<[], [llvm_i16_ty],
+                        [IntrNoMem, IntrHasSideEffects, ImmArg<ArgIndex<0>>]>;
 
 // This is IntrHasSideEffects so it can be used to read cycle counters.
 def int_amdgcn_s_getreg :
@@ -1839,12 +1838,12 @@ def int_amdgcn_live_mask : DefaultAttrsIntrinsic <[llvm_i1_ty],
 def int_amdgcn_mbcnt_lo :
   ClangBuiltin<"__builtin_amdgcn_mbcnt_lo">,
   DefaultAttrsIntrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty],
-   [IntrNoMem, IntrConvergent]>;
+   [IntrNoMem]>;
 
 def int_amdgcn_mbcnt_hi :
   ClangBuiltin<"__builtin_amdgcn_mbcnt_hi">,
   DefaultAttrsIntrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty],
-            [IntrNoMem, IntrConvergent]>;
+            [IntrNoMem]>;
 
 // llvm.amdgcn.ds.swizzle src offset
 def int_amdgcn_ds_swizzle :
@@ -1933,7 +1932,36 @@ def int_amdgcn_ballot :
 
 def int_amdgcn_inverse_ballot :
   Intrinsic<[llvm_i1_ty], [llvm_anyint_ty],
-            [IntrNoMem, IntrConvergent, IntrWillReturn, IntrNoCallback, IntrNoFree]>;
+            [IntrNoMem, IntrWillReturn, IntrNoCallback, IntrNoFree]>;
+
+// Lowers to S_BITREPLICATE_B64_B32.
+// The argument must be uniform; otherwise, the result is undefined.
+def int_amdgcn_s_bitreplicate :
+  DefaultAttrsIntrinsic<[llvm_i64_ty], [llvm_i32_ty], [IntrNoMem, IntrConvergent]>;
+
+// Lowers to S_QUADMASK_B{32,64}
+// The argument must be uniform; otherwise, the result is undefined.
+def int_amdgcn_s_quadmask :
+  DefaultAttrsIntrinsic<[llvm_anyint_ty], [llvm_anyint_ty], [IntrNoMem, IntrConvergent]>;
+
+// Lowers to S_WQM_B{32,64}
+// The argument must be uniform; otherwise, the result is undefined.
+// Does not set WQM; merely calculates the bitmask.
+def int_amdgcn_s_wqm :
+  DefaultAttrsIntrinsic<[llvm_anyint_ty], [llvm_anyint_ty], [IntrNoMem, IntrConvergent]>;
+
+class AMDGPUWaveReduce<LLVMType data_ty = llvm_anyint_ty> : Intrinsic<
+    [data_ty],
+    [
+      LLVMMatchType<0>,   // llvm value to reduce (SGPR/VGPR)
+      llvm_i32_ty         // Reduction Strategy Switch for lowering ( 0: Default,
+                          //                                          1: Iterative strategy, and
+                          //                                          2. DPP)
+    ],
+    [IntrNoMem, IntrConvergent, IntrWillReturn, IntrNoCallback, IntrNoFree, ImmArg<ArgIndex<1>>]>;
+
+def int_amdgcn_wave_reduce_umin : AMDGPUWaveReduce;
+def int_amdgcn_wave_reduce_umax : AMDGPUWaveReduce;
 
 def int_amdgcn_readfirstlane :
   ClangBuiltin<"__builtin_amdgcn_readfirstlane">,
@@ -2107,6 +2135,17 @@ def int_amdgcn_set_inactive :
              LLVMMatchType<0>], // value for the inactive lanes to take
             [IntrNoMem, IntrConvergent, IntrWillReturn, IntrNoCallback, IntrNoFree]>;
 
+// Similar to int_amdgcn_set_inactive, but the value for the inactive lanes must
+// be a VGPR function argument.
+// Can only be used in functions with the `amdgpu_cs_chain` or
+// `amdgpu_cs_chain_preserve` calling conventions, and only in uniform control
+// flow.
+def int_amdgcn_set_inactive_chain_arg :
+  Intrinsic<[llvm_anyint_ty],
+            [LLVMMatchType<0>, // value to be copied
+             LLVMMatchType<0>], // value for the inactive lanes to take
+            [IntrNoMem, IntrConvergent, IntrWillReturn, IntrNoCallback, IntrNoFree]>;
+
 // Return if the given flat pointer points to a local memory address.
 def int_amdgcn_is_shared : ClangBuiltin<"__builtin_amdgcn_is_shared">,
   DefaultAttrsIntrinsic<[llvm_i1_ty], [llvm_ptr_ty],
@@ -2118,6 +2157,28 @@ def int_amdgcn_is_private : ClangBuiltin<"__builtin_amdgcn_is_private">,
   DefaultAttrsIntrinsic<[llvm_i1_ty], [llvm_ptr_ty],
   [IntrNoMem, IntrSpeculatable, NoCapture<ArgIndex<0>>]
 >;
+
+// A uniform tail call to a function with the `amdgpu_cs_chain` or
+// `amdgpu_cs_chain_preserve` calling convention. It will populate the SGPRs
+// starting at s0 and the VGPRs starting at v8, set EXEC and perform a jump to
+// the given function.
+// Can only be used in functions with the `amdgpu_cs`, `amdgpu_cs_chain` or
+// `amdgpu_cs_chain_preserve` calling conventions, and only in uniform control
+// flow.
+def int_amdgcn_cs_chain:
+  Intrinsic<[],
+            [llvm_anyptr_ty, // The function to jump to.
+             llvm_anyint_ty, // Value to put in EXEC (should be i32 or i64).
+             llvm_any_ty, // Arguments that will be copied into SGPRs (s0+).
+                          // Must be uniform.
+             llvm_any_ty, // Arguments that will be copied into VGPRs (v8+).
+                          // Need not be uniform.
+             llvm_i32_ty, // Flags.
+             llvm_vararg_ty // Additional arguments. Only present if Flags is
+                            // non-zero.
+            ],
+            [IntrConvergent, IntrNoReturn, ImmArg<ArgIndex<4>>]>;
+
 
 //===----------------------------------------------------------------------===//
 // CI+ Intrinsics
@@ -2149,7 +2210,7 @@ def int_amdgcn_mov_dpp :
 // v_mov_b32 <dest> <old>
 // v_mov_b32 <dest> <src> <dpp_ctrl> <row_mask> <bank_mask> <bound_ctrl>
 def int_amdgcn_update_dpp :
-  Intrinsic<[llvm_anyint_ty],
+  Intrinsic<[llvm_any_ty],
             [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty,
             llvm_i32_ty, llvm_i32_ty, llvm_i1_ty],
              [IntrNoMem, IntrConvergent, IntrWillReturn,
@@ -2192,8 +2253,8 @@ def int_amdgcn_perm :
 
 class AMDGPUGlobalLoadLDS : Intrinsic <
   [],
-  [LLVMQualPointerType<llvm_i8_ty, 1>, // Base global pointer to load from
-   LLVMQualPointerType<llvm_i8_ty, 3>, // LDS base pointer to store to
+  [LLVMQualPointerType<1>,             // Base global pointer to load from
+   LLVMQualPointerType<3>,             // LDS base pointer to store to
    llvm_i32_ty,                        // Data byte size: 1/2/4
    llvm_i32_ty,                        // imm offset (applied to both global and LDS address)
    llvm_i32_ty],                       // auxiliary data (imm, cachepolicy (bit 0 = glc/sc0,
@@ -2334,8 +2395,16 @@ class AMDGPUWmmaIntrinsicIU<LLVMType AB, LLVMType CD> :
 
 def int_amdgcn_wmma_f32_16x16x16_f16   : AMDGPUWmmaIntrinsic<llvm_v16f16_ty, llvm_anyfloat_ty>;
 def int_amdgcn_wmma_f32_16x16x16_bf16  : AMDGPUWmmaIntrinsic<llvm_v16i16_ty, llvm_anyfloat_ty>;
+// The regular, untied f16/bf16 wmma intrinsics only write to one half
+// of the registers (set via the op_sel bit).
+// The content of the other 16-bit of the registers is undefined.
 def int_amdgcn_wmma_f16_16x16x16_f16   : AMDGPUWmmaIntrinsicOPSEL<llvm_v16f16_ty, llvm_anyfloat_ty>;
 def int_amdgcn_wmma_bf16_16x16x16_bf16 : AMDGPUWmmaIntrinsicOPSEL<llvm_v16i16_ty, llvm_anyint_ty>;
+// The tied versions of the f16/bf16 wmma intrinsics tie the destination matrix
+// registers to the input accumulator registers.
+// Essentially, the content of the other 16-bit is preserved from the input.
+def int_amdgcn_wmma_f16_16x16x16_f16_tied   : AMDGPUWmmaIntrinsicOPSEL<llvm_v16f16_ty, llvm_anyfloat_ty>;
+def int_amdgcn_wmma_bf16_16x16x16_bf16_tied : AMDGPUWmmaIntrinsicOPSEL<llvm_v16i16_ty, llvm_anyint_ty>;
 def int_amdgcn_wmma_i32_16x16x16_iu8   : AMDGPUWmmaIntrinsicIU<llvm_v4i32_ty, llvm_anyint_ty>;
 def int_amdgcn_wmma_i32_16x16x16_iu4   : AMDGPUWmmaIntrinsicIU<llvm_v2i32_ty, llvm_anyint_ty>;
 
@@ -2608,7 +2677,7 @@ def int_amdgcn_global_atomic_fadd_v2bf16 : AMDGPUGlobalAtomicRtn<llvm_v2i16_ty>;
 def int_amdgcn_flat_atomic_fadd_v2bf16   : AMDGPUGlobalAtomicRtn<llvm_v2i16_ty>;
 def int_amdgcn_ds_fadd_v2bf16 : DefaultAttrsIntrinsic<
     [llvm_v2i16_ty],
-    [LLVMQualPointerType<llvm_v2i16_ty, 3>, llvm_v2i16_ty],
+    [LLVMQualPointerType<3>, llvm_v2i16_ty],
     [IntrArgMemOnly, NoCapture<ArgIndex<0>>]>,
     ClangBuiltin<"__builtin_amdgcn_ds_atomic_fadd_v2bf16">;
 

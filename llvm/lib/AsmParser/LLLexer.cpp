@@ -279,7 +279,7 @@ lltok::Kind LLLexer::LexDollar() {
       if (CurChar == '"') {
         StrVal.assign(TokStart + 2, CurPtr - 1);
         UnEscapeLexed(StrVal);
-        if (StringRef(StrVal).find_first_of(0) != StringRef::npos) {
+        if (StringRef(StrVal).contains(0)) {
           Error("Null bytes are not allowed in names");
           return lltok::Error;
         }
@@ -362,7 +362,7 @@ lltok::Kind LLLexer::LexVar(lltok::Kind Var, lltok::Kind VarID) {
       if (CurChar == '"') {
         StrVal.assign(TokStart+2, CurPtr-1);
         UnEscapeLexed(StrVal);
-        if (StringRef(StrVal).find_first_of(0) != StringRef::npos) {
+        if (StringRef(StrVal).contains(0)) {
           Error("Null bytes are not allowed in names");
           return lltok::Error;
         }
@@ -397,7 +397,7 @@ lltok::Kind LLLexer::LexQuote() {
 
   if (CurPtr[0] == ':') {
     ++CurPtr;
-    if (StringRef(StrVal).find_first_of(0) != StringRef::npos) {
+    if (StringRef(StrVal).contains(0)) {
       Error("Null bytes are not allowed in names");
       kind = lltok::Error;
     } else {
@@ -565,6 +565,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(nsw);
   KEYWORD(exact);
   KEYWORD(inbounds);
+  KEYWORD(nneg);
   KEYWORD(inrange);
   KEYWORD(addrspace);
   KEYWORD(section);
@@ -609,7 +610,6 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(x86_64_sysvcc);
   KEYWORD(win64cc);
   KEYWORD(x86_regcallcc);
-  KEYWORD(webkit_jscc);
   KEYWORD(swiftcc);
   KEYWORD(swifttailcc);
   KEYWORD(anyregcc);
@@ -627,9 +627,12 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(amdgpu_gs);
   KEYWORD(amdgpu_ps);
   KEYWORD(amdgpu_cs);
+  KEYWORD(amdgpu_cs_chain);
+  KEYWORD(amdgpu_cs_chain_preserve);
   KEYWORD(amdgpu_kernel);
   KEYWORD(amdgpu_gfx);
   KEYWORD(tailcc);
+  KEYWORD(m68k_rtdcc);
 
   KEYWORD(cc);
   KEYWORD(c);
@@ -823,15 +826,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   TYPEKEYWORD("x86_mmx",   Type::getX86_MMXTy(Context));
   TYPEKEYWORD("x86_amx",   Type::getX86_AMXTy(Context));
   TYPEKEYWORD("token",     Type::getTokenTy(Context));
-
-  if (Keyword == "ptr") {
-    if (Context.supportsTypedPointers()) {
-      Warning("ptr type is only supported in -opaque-pointers mode");
-      return lltok::Error;
-    }
-    TyVal = PointerType::getUnqual(Context);
-    return lltok::Type;
-  }
+  TYPEKEYWORD("ptr",       PointerType::getUnqual(Context));
 
 #undef TYPEKEYWORD
 
@@ -944,7 +939,8 @@ lltok::Kind LLLexer::LexIdentifier() {
     return lltok::EmissionKind;
   }
 
-  if (Keyword == "GNU" || Keyword == "None" || Keyword == "Default") {
+  if (Keyword == "GNU" || Keyword == "Apple" || Keyword == "None" ||
+      Keyword == "Default") {
     StrVal.assign(Keyword.begin(), Keyword.end());
     return lltok::NameTableKind;
   }

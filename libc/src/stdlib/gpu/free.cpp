@@ -10,14 +10,14 @@
 #include "src/__support/RPC/rpc_client.h"
 #include "src/__support/common.h"
 
-namespace __llvm_libc {
+namespace LIBC_NAMESPACE {
 
 LLVM_LIBC_FUNCTION(void, free, (void *ptr)) {
-  rpc::Client::Port port = rpc::client.open<rpc::FREE>();
+  rpc::Client::Port port = rpc::client.open<RPC_FREE>();
   port.send([=](rpc::Buffer *buffer) {
     buffer->data[0] = reinterpret_cast<uintptr_t>(ptr);
   });
   port.close();
 }
 
-} // namespace __llvm_libc
+} // namespace LIBC_NAMESPACE

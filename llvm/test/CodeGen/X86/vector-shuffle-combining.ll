@@ -1749,13 +1749,21 @@ define <4 x i8> @combine_test1c(ptr %a, ptr %b) {
 ; SSE41-NEXT:    movdqa %xmm1, %xmm0
 ; SSE41-NEXT:    retq
 ;
-; AVX-LABEL: combine_test1c:
-; AVX:       # %bb.0:
-; AVX-NEXT:    vmovd {{.*#+}} xmm0 = mem[0],zero,zero,zero
-; AVX-NEXT:    vmovd {{.*#+}} xmm1 = mem[0],zero,zero,zero
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm2 = <0,255,255,255,u,u,u,u,u,u,u,u,u,u,u,u>
-; AVX-NEXT:    vpblendvb %xmm2, %xmm1, %xmm0, %xmm0
-; AVX-NEXT:    retq
+; AVX1-LABEL: combine_test1c:
+; AVX1:       # %bb.0:
+; AVX1-NEXT:    vmovd {{.*#+}} xmm0 = mem[0],zero,zero,zero
+; AVX1-NEXT:    vmovd {{.*#+}} xmm1 = mem[0],zero,zero,zero
+; AVX1-NEXT:    vbroadcastss {{.*#+}} xmm2 = [0,255,255,255,0,255,255,255,0,255,255,255,0,255,255,255]
+; AVX1-NEXT:    vpblendvb %xmm2, %xmm1, %xmm0, %xmm0
+; AVX1-NEXT:    retq
+;
+; AVX2-LABEL: combine_test1c:
+; AVX2:       # %bb.0:
+; AVX2-NEXT:    vmovd {{.*#+}} xmm0 = mem[0],zero,zero,zero
+; AVX2-NEXT:    vmovd {{.*#+}} xmm1 = mem[0],zero,zero,zero
+; AVX2-NEXT:    vpbroadcastd {{.*#+}} xmm2 = [0,255,255,255,0,255,255,255,0,255,255,255,0,255,255,255]
+; AVX2-NEXT:    vpblendvb %xmm2, %xmm1, %xmm0, %xmm0
+; AVX2-NEXT:    retq
   %A = load <4 x i8>, ptr %a
   %B = load <4 x i8>, ptr %b
   %1 = shufflevector <4 x i8> %A, <4 x i8> %B, <4 x i32> <i32 0, i32 5, i32 2, i32 7>
@@ -1835,13 +1843,21 @@ define <4 x i8> @combine_test4c(ptr %a, ptr %b) {
 ; SSE41-NEXT:    movdqa %xmm1, %xmm0
 ; SSE41-NEXT:    retq
 ;
-; AVX-LABEL: combine_test4c:
-; AVX:       # %bb.0:
-; AVX-NEXT:    vmovd {{.*#+}} xmm0 = mem[0],zero,zero,zero
-; AVX-NEXT:    vmovd {{.*#+}} xmm1 = mem[0],zero,zero,zero
-; AVX-NEXT:    vmovdqa {{.*#+}} xmm2 = <255,0,255,255,u,u,u,u,u,u,u,u,u,u,u,u>
-; AVX-NEXT:    vpblendvb %xmm2, %xmm1, %xmm0, %xmm0
-; AVX-NEXT:    retq
+; AVX1-LABEL: combine_test4c:
+; AVX1:       # %bb.0:
+; AVX1-NEXT:    vmovd {{.*#+}} xmm0 = mem[0],zero,zero,zero
+; AVX1-NEXT:    vmovd {{.*#+}} xmm1 = mem[0],zero,zero,zero
+; AVX1-NEXT:    vbroadcastss {{.*#+}} xmm2 = [255,0,255,255,255,0,255,255,255,0,255,255,255,0,255,255]
+; AVX1-NEXT:    vpblendvb %xmm2, %xmm1, %xmm0, %xmm0
+; AVX1-NEXT:    retq
+;
+; AVX2-LABEL: combine_test4c:
+; AVX2:       # %bb.0:
+; AVX2-NEXT:    vmovd {{.*#+}} xmm0 = mem[0],zero,zero,zero
+; AVX2-NEXT:    vmovd {{.*#+}} xmm1 = mem[0],zero,zero,zero
+; AVX2-NEXT:    vpbroadcastd {{.*#+}} xmm2 = [255,0,255,255,255,0,255,255,255,0,255,255,255,0,255,255]
+; AVX2-NEXT:    vpblendvb %xmm2, %xmm1, %xmm0, %xmm0
+; AVX2-NEXT:    retq
   %A = load <4 x i8>, ptr %a
   %B = load <4 x i8>, ptr %b
   %1 = shufflevector <4 x i8> %A, <4 x i8> %B, <4 x i32> <i32 4, i32 1, i32 6, i32 3>
@@ -3303,7 +3319,8 @@ define void @PR45604(ptr %dst, ptr %src) {
 ; AVX1-NEXT:    vmovdqa (%rsi), %xmm0
 ; AVX1-NEXT:    vpshufd {{.*#+}} xmm1 = xmm0[3,3,3,3]
 ; AVX1-NEXT:    vpmovzxwq {{.*#+}} xmm1 = xmm1[0],zero,zero,zero,xmm1[1],zero,zero,zero
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm2 = [11,11,11,0,11,11,11,0]
+; AVX1-NEXT:    vmovddup {{.*#+}} xmm2 = [11,11,11,0,11,11,11,0]
+; AVX1-NEXT:    # xmm2 = mem[0,0]
 ; AVX1-NEXT:    vpblendw {{.*#+}} xmm1 = xmm1[0,1],xmm2[2,3],xmm1[4,5],xmm2[6,7]
 ; AVX1-NEXT:    vpshufd {{.*#+}} xmm3 = xmm0[2,3,2,3]
 ; AVX1-NEXT:    vpmovzxwq {{.*#+}} xmm3 = xmm3[0],zero,zero,zero,xmm3[1],zero,zero,zero
@@ -3326,7 +3343,7 @@ define void @PR45604(ptr %dst, ptr %src) {
 ; AVX2-NEXT:    vpermq {{.*#+}} ymm1 = ymm0[0,2,0,2]
 ; AVX2-NEXT:    vmovdqa {{.*#+}} ymm2 = <0,1,8,9,u,u,u,u,2,3,10,11,u,u,u,u,4,5,12,13,u,u,u,u,6,7,14,15,u,u,u,u>
 ; AVX2-NEXT:    vpshufb %ymm2, %ymm1, %ymm1
-; AVX2-NEXT:    vmovdqa {{.*#+}} ymm3 = <u,u,u,u,11,0,0,0,u,u,u,u,11,0,0,0,u,u,u,u,11,0,0,0,u,u,u,u,11,0,0,0>
+; AVX2-NEXT:    vpbroadcastd {{.*#+}} ymm3 = [11,0,0,0,11,0,0,0,11,0,0,0,11,0,0,0,11,0,0,0,11,0,0,0,11,0,0,0,11,0,0,0]
 ; AVX2-NEXT:    vpblendd {{.*#+}} ymm1 = ymm1[0],ymm3[1],ymm1[2],ymm3[3],ymm1[4],ymm3[5],ymm1[6],ymm3[7]
 ; AVX2-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[1,3,1,3]
 ; AVX2-NEXT:    vpshufb %ymm2, %ymm0, %ymm0
@@ -3411,6 +3428,52 @@ define <2 x i64> @PR56520(<16 x i8> %0) {
   %6 = zext <2 x i32> %5 to <2 x i64>
   %7 = shufflevector <2 x i64> %6, <2 x i64> zeroinitializer, <2 x i32> zeroinitializer
   ret <2 x i64> %7
+}
+
+define <4 x i32> @PR63700(i128 %0) {
+; SSE2-LABEL: PR63700:
+; SSE2:       # %bb.0:
+; SSE2-NEXT:    movd %edi, %xmm0
+; SSE2-NEXT:    pshufd {{.*#+}} xmm0 = xmm0[0,0,0,0]
+; SSE2-NEXT:    pand {{\.?LCPI[0-9]+_[0-9]+}}(%rip), %xmm0
+; SSE2-NEXT:    retq
+;
+; SSSE3-LABEL: PR63700:
+; SSSE3:       # %bb.0:
+; SSSE3-NEXT:    movd %edi, %xmm0
+; SSSE3-NEXT:    pshufb {{.*#+}} xmm0 = xmm0[0,1,2,3],zero,zero,zero,zero,xmm0[0,1,2,3],zero,zero,zero,zero
+; SSSE3-NEXT:    retq
+;
+; SSE41-LABEL: PR63700:
+; SSE41:       # %bb.0:
+; SSE41-NEXT:    movd %edi, %xmm0
+; SSE41-NEXT:    pshufd {{.*#+}} xmm0 = xmm0[0,0,0,0]
+; SSE41-NEXT:    pmovzxdq {{.*#+}} xmm0 = xmm0[0],zero,xmm0[1],zero
+; SSE41-NEXT:    retq
+;
+; AVX1-LABEL: PR63700:
+; AVX1:       # %bb.0:
+; AVX1-NEXT:    vmovd %edi, %xmm0
+; AVX1-NEXT:    vpshufd {{.*#+}} xmm0 = xmm0[0,0,0,0]
+; AVX1-NEXT:    vpmovzxdq {{.*#+}} xmm0 = xmm0[0],zero,xmm0[1],zero
+; AVX1-NEXT:    retq
+;
+; AVX2-SLOW-LABEL: PR63700:
+; AVX2-SLOW:       # %bb.0:
+; AVX2-SLOW-NEXT:    vmovd %edi, %xmm0
+; AVX2-SLOW-NEXT:    vpbroadcastd %xmm0, %xmm0
+; AVX2-SLOW-NEXT:    vpmovzxdq {{.*#+}} xmm0 = xmm0[0],zero,xmm0[1],zero
+; AVX2-SLOW-NEXT:    retq
+;
+; AVX2-FAST-LABEL: PR63700:
+; AVX2-FAST:       # %bb.0:
+; AVX2-FAST-NEXT:    vmovq %rdi, %xmm0
+; AVX2-FAST-NEXT:    vpshufb {{.*#+}} xmm0 = xmm0[0,1,2,3],zero,zero,zero,zero,xmm0[0,1,2,3],zero,zero,zero,zero
+; AVX2-FAST-NEXT:    retq
+  %vcmp = bitcast i128 %0 to <4 x i32>
+  %shuffle.i = shufflevector <4 x i32> %vcmp, <4 x i32> zeroinitializer, <4 x i32> <i32 0, i32 0, i32 undef, i32 undef>
+  %shuffle.i11 = shufflevector <4 x i32> %shuffle.i, <4 x i32> zeroinitializer, <4 x i32> <i32 0, i32 4, i32 1, i32 5>
+  ret <4 x i32> %shuffle.i11
 }
 
 ; Test case reported on D105827
@@ -3521,9 +3584,9 @@ define void @autogen_SD25931() {
 ; CHECK-LABEL: autogen_SD25931:
 ; CHECK:       # %bb.0: # %BB
 ; CHECK-NEXT:    .p2align 4, 0x90
-; CHECK-NEXT:  .LBB139_1: # %CF242
+; CHECK-NEXT:  .LBB140_1: # %CF242
 ; CHECK-NEXT:    # =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    jmp .LBB139_1
+; CHECK-NEXT:    jmp .LBB140_1
 BB:
   %Cmp16 = icmp uge <2 x i1> zeroinitializer, zeroinitializer
   %Shuff19 = shufflevector <2 x i1> zeroinitializer, <2 x i1> %Cmp16, <2 x i32> <i32 3, i32 1>

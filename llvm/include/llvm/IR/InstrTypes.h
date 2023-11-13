@@ -245,7 +245,7 @@ public:
 #include "llvm/IR/Instruction.def"
 
   static BinaryOperator *
-  CreateWithCopiedFlags(BinaryOps Opc, Value *V1, Value *V2, Instruction *CopyO,
+  CreateWithCopiedFlags(BinaryOps Opc, Value *V1, Value *V2, Value *CopyO,
                         const Twine &Name = "",
                         Instruction *InsertBefore = nullptr) {
     BinaryOperator *BO = Create(Opc, V1, V2, Name, InsertBefore);
@@ -687,6 +687,20 @@ public:
   static bool classof(const Instruction *I) {
     return I->isCast();
   }
+  static bool classof(const Value *V) {
+    return isa<Instruction>(V) && classof(cast<Instruction>(V));
+  }
+};
+
+/// Instruction that can have a nneg flag (only zext).
+class PossiblyNonNegInst : public CastInst {
+public:
+  enum { NonNeg = (1 << 0) };
+
+  static bool classof(const Instruction *I) {
+    return I->getOpcode() == Instruction::ZExt;
+  }
+
   static bool classof(const Value *V) {
     return isa<Instruction>(V) && classof(cast<Instruction>(V));
   }
@@ -1461,7 +1475,6 @@ public:
   /// type.
   void setCalledFunction(FunctionType *FTy, Value *Fn) {
     this->FTy = FTy;
-    assert(cast<PointerType>(Fn->getType())->isOpaqueOrPointeeTypeMatches(FTy));
     // This function doesn't mutate the return type, only the function
     // type. Seems broken, but I'm just gonna stick an assert in for now.
     assert(getType() == FTy->getReturnType());

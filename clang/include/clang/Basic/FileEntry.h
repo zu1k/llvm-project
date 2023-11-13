@@ -234,6 +234,7 @@ static_assert(std::is_trivially_copyable<OptionalFileEntryRef>::value,
 } // namespace clang
 
 namespace llvm {
+
 /// Specialisation of DenseMapInfo for FileEntryRef.
 template <> struct DenseMapInfo<clang::FileEntryRef> {
   static inline clang::FileEntryRef getEmptyKey() {
@@ -260,6 +261,18 @@ template <> struct DenseMapInfo<clang::FileEntryRef> {
     // It's safe to use operator==.
     return LHS == RHS;
   }
+
+  /// Support for finding `const FileEntry *` in a `DenseMap<FileEntryRef, T>`.
+  /// @{
+  static unsigned getHashValue(const clang::FileEntry *Val) {
+    return llvm::hash_value(Val);
+  }
+  static bool isEqual(const clang::FileEntry *LHS, clang::FileEntryRef RHS) {
+    if (RHS.isSpecialDenseMapKey())
+      return false;
+    return LHS == RHS;
+  }
+  /// @}
 };
 
 } // end namespace llvm
@@ -382,7 +395,6 @@ class FileEntry {
 public:
   ~FileEntry();
   StringRef getName() const { return LastRef->getName(); }
-  FileEntryRef getLastRef() const { return *LastRef; }
 
   StringRef tryGetRealPathName() const { return RealPathName; }
   off_t getSize() const { return Size; }

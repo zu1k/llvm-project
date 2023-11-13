@@ -212,6 +212,8 @@ def testFloatType():
         print("float:", BF16Type.get())
         # CHECK: float: f16
         print("float:", F16Type.get())
+        # CHECK: float: tf32
+        print("float:", FloatTF32Type.get())
         # CHECK: float: f32
         print("float:", F32Type.get())
         # CHECK: float: f64
@@ -298,10 +300,50 @@ def testVectorType():
 
         none = NoneType.get()
         try:
-            vector_invalid = VectorType.get(shape, none)
+            VectorType.get(shape, none)
         except MLIRError as e:
             # CHECK: Invalid type:
             # CHECK: error: unknown: vector elements must be int/index/float type but got 'none'
+            print(e)
+        else:
+            print("Exception not produced")
+
+        scalable_1 = VectorType.get(shape, f32, scalable=[False, True])
+        scalable_2 = VectorType.get([2, 3, 4], f32, scalable=[True, False, True])
+        assert scalable_1.scalable
+        assert scalable_2.scalable
+        assert scalable_1.scalable_dims == [False, True]
+        assert scalable_2.scalable_dims == [True, False, True]
+        # CHECK: scalable 1: vector<2x[3]xf32>
+        print("scalable 1: ", scalable_1)
+        # CHECK: scalable 2: vector<[2]x3x[4]xf32>
+        print("scalable 2: ", scalable_2)
+
+        scalable_3 = VectorType.get(shape, f32, scalable_dims=[1])
+        scalable_4 = VectorType.get([2, 3, 4], f32, scalable_dims=[0, 2])
+        assert scalable_3 == scalable_1
+        assert scalable_4 == scalable_2
+
+        try:
+            VectorType.get(shape, f32, scalable=[False, True, True])
+        except ValueError as e:
+            # CHECK: Expected len(scalable) == len(shape).
+            print(e)
+        else:
+            print("Exception not produced")
+
+        try:
+            VectorType.get(shape, f32, scalable=[False, True], scalable_dims=[1])
+        except ValueError as e:
+            # CHECK: kwargs are mutually exclusive.
+            print(e)
+        else:
+            print("Exception not produced")
+
+        try:
+            VectorType.get(shape, f32, scalable_dims=[42])
+        except ValueError as e:
+            # CHECK: Scalable dimension index out of bounds.
             print(e)
         else:
             print("Exception not produced")
@@ -327,11 +369,12 @@ def testRankedTensorType():
         else:
             print("Exception not produced")
 
+        tensor = RankedTensorType.get(shape, f32, StringAttr.get("encoding"))
+        assert tensor.shape == shape
+        assert tensor.encoding.value == "encoding"
+
         # Encoding should be None.
         assert RankedTensorType.get(shape, f32).encoding is None
-
-        tensor = RankedTensorType.get(shape, f32)
-        assert tensor.shape == shape
 
 
 # CHECK-LABEL: TEST: testUnrankedTensorType
@@ -386,12 +429,12 @@ def testMemRefType():
         memref_f32 = MemRefType.get(shape, f32, memory_space=Attribute.parse("2"))
         # CHECK: memref type: memref<2x3xf32, 2>
         print("memref type:", memref_f32)
-        # CHECK: memref layout: affine_map<(d0, d1) -> (d0, d1)>
-        print("memref layout:", memref_f32.layout)
+        # CHECK: memref layout: AffineMapAttr(affine_map<(d0, d1) -> (d0, d1)>)
+        print("memref layout:", repr(memref_f32.layout))
         # CHECK: memref affine map: (d0, d1) -> (d0, d1)
         print("memref affine map:", memref_f32.affine_map)
-        # CHECK: memory space: 2
-        print("memory space:", memref_f32.memory_space)
+        # CHECK: memory space: IntegerAttr(2 : i64)
+        print("memory space:", repr(memref_f32.memory_space))
 
         layout = AffineMapAttr.get(AffineMap.get_permutation([1, 0]))
         memref_layout = MemRefType.get(shape, f32, layout=layout)
@@ -401,7 +444,7 @@ def testMemRefType():
         print("memref layout:", memref_layout.layout)
         # CHECK: memref affine map: (d0, d1) -> (d1, d0)
         print("memref affine map:", memref_layout.affine_map)
-        # CHECK: memory space: <<NULL ATTRIBUTE>>
+        # CHECK: memory space: None
         print("memory space:", memref_layout.memory_space)
 
         none = NoneType.get()
@@ -426,6 +469,8 @@ def testUnrankedMemRefType():
         unranked_memref = UnrankedMemRefType.get(f32, Attribute.parse("2"))
         # CHECK: unranked memref type: memref<*xf32, 2>
         print("unranked memref type:", unranked_memref)
+        # CHECK: memory space: IntegerAttr(2 : i64)
+        print("memory space:", repr(unranked_memref.memory_space))
         try:
             invalid_rank = unranked_memref.rank
         except ValueError as e:

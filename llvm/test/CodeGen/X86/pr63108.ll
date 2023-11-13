@@ -34,9 +34,10 @@ define i32 @PR63108() {
 ; SSE-NEXT:    psrld $16, %xmm0
 ; SSE-NEXT:    pxor %xmm2, %xmm0
 ; SSE-NEXT:  .LBB0_5: # %for.cond.cleanup
-; SSE-NEXT:    movdqa %xmm0, -{{[0-9]+}}(%rsp)
-; SSE-NEXT:    movsbl -{{[0-9]+}}(%rsp), %ecx
-; SSE-NEXT:    movsbl -{{[0-9]+}}(%rsp), %eax
+; SSE-NEXT:    movd %xmm0, %eax
+; SSE-NEXT:    movsbl %al, %ecx
+; SSE-NEXT:    shrl $8, %eax
+; SSE-NEXT:    movsbl %al, %eax
 ; SSE-NEXT:    addl %ecx, %eax
 ; SSE-NEXT:    retq
 ;
@@ -46,7 +47,7 @@ define i32 @PR63108() {
 ; AVX1-NEXT:    testb %al, %al
 ; AVX1-NEXT:    je .LBB0_2
 ; AVX1-NEXT:  # %bb.1:
-; AVX1-NEXT:    vmovdqa {{.*#+}} xmm0 = <251,223,u,u,u,u,u,u,u,u,u,u,u,u,u,u>
+; AVX1-NEXT:    vbroadcastss {{.*#+}} xmm0 = [251,223,0,0,251,223,0,0,251,223,0,0,251,223,0,0]
 ; AVX1-NEXT:    jmp .LBB0_5
 ; AVX1-NEXT:  .LBB0_2: # %vector.body.preheader
 ; AVX1-NEXT:    vmovaps {{.*#+}} xmm0 = [57339,0,0,0]
@@ -83,7 +84,7 @@ define i32 @PR63108() {
 ; AVX2-NEXT:    testb %al, %al
 ; AVX2-NEXT:    je .LBB0_2
 ; AVX2-NEXT:  # %bb.1:
-; AVX2-NEXT:    vmovdqa {{.*#+}} xmm0 = <251,223,u,u,u,u,u,u,u,u,u,u,u,u,u,u>
+; AVX2-NEXT:    vpbroadcastw {{.*#+}} xmm0 = [251,223,251,223,251,223,251,223,251,223,251,223,251,223,251,223]
 ; AVX2-NEXT:    jmp .LBB0_5
 ; AVX2-NEXT:  .LBB0_2: # %vector.body.preheader
 ; AVX2-NEXT:    vmovdqa {{.*#+}} xmm0 = [57339,0,0,0]
@@ -120,7 +121,7 @@ define i32 @PR63108() {
 ; AVX512-NEXT:    testb %al, %al
 ; AVX512-NEXT:    je .LBB0_2
 ; AVX512-NEXT:  # %bb.1:
-; AVX512-NEXT:    vmovdqa {{.*#+}} xmm0 = <251,223,u,u,u,u,u,u,u,u,u,u,u,u,u,u>
+; AVX512-NEXT:    vpbroadcastw {{.*#+}} xmm0 = [251,223,251,223,251,223,251,223,251,223,251,223,251,223,251,223]
 ; AVX512-NEXT:    jmp .LBB0_5
 ; AVX512-NEXT:  .LBB0_2: # %vector.body.preheader
 ; AVX512-NEXT:    vmovdqa {{.*#+}} xmm0 = [57339,0,0,0]

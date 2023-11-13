@@ -12,6 +12,7 @@ set(LLVM_OPTIONAL_SOURCES
   RunnerUtils.cpp
   OptUtils.cpp
   JitRunner.cpp
+  SyclRuntimeWrappers.cpp
   )
 
 # Use a separate library for OptUtils, to avoid pulling in the entire JIT and
@@ -262,11 +263,15 @@ if(LLVM_ENABLE_PIC)
     set(CMAKE_PREFIX_PATH "${REAL_CMAKE_PREFIX_PATH}")
 
     if (NOT DEFINED ROCM_TEST_CHIPSET)
-      execute_process(COMMAND "${ROCM_PATH}/bin/rocm_agent_enumerator"
-      OUTPUT_VARIABLE AGENTS_STRING
-      ERROR_VARIABLE AGENTS_STRING
-      RESULT_VARIABLE AGENT_ENUMERATOR_RESULT)
-
+      find_program(ROCM_AGENT_ENUMERATOR rocm_agent_enumerator "${ROCM_PATH}/bin" /usr/bin /usr/local/bin)
+      if(ROCM_AGENT_ENUMERATOR)
+          execute_process(COMMAND "${ROCM_AGENT_ENUMERATOR}"
+          OUTPUT_VARIABLE AGENTS_STRING
+          ERROR_VARIABLE AGENTS_STRING
+          RESULT_VARIABLE AGENT_ENUMERATOR_RESULT)
+      else()
+        message(SEND_ERROR "Could not find rocm_agent_enumerator")
+      endif()
       if (NOT AGENT_ENUMERATOR_RESULT EQUAL 0)
         message(SEND_ERROR "Could not run rocm_agent_enumerator and ROCM_TEST_CHIPSET is not defined")
         set(AGENTS_STRING "")
@@ -323,5 +328,40 @@ if(LLVM_ENABLE_PIC)
       PUBLIC
       hip::host hip::amdhip64
     )
+  endif()
+
+  if(MLIR_ENABLE_SYCL_RUNNER)
+    find_package(SyclRuntime)
+
+    if(NOT SyclRuntime_FOUND)
+      message(FATAL_ERROR "syclRuntime not found. Please set check oneapi installation and run setvars.sh.")
+    endif()
+
+    find_package(LevelZero)
+
+    if(NOT LevelZero_FOUND)
+      message(FATAL_ERROR "LevelZero not found. Please set LEVEL_ZERO_DIR.")
+    endif()
+
+    add_mlir_library(mlir_sycl_runtime
+      SHARED
+      SyclRuntimeWrappers.cpp
+
+      EXCLUDE_FROM_LIBMLIR
+    )
+
+    check_cxx_compiler_flag("-frtti" CXX_HAS_FRTTI_FLAG)
+    if(NOT CXX_HAS_FRTTI_FLAG)
+      message(FATAL_ERROR "CXX compiler does not accept flag -frtti")
+    endif()
+    target_compile_options (mlir_sycl_runtime PUBLIC -fexceptions -frtti)
+
+    target_include_directories(mlir_sycl_runtime PRIVATE
+      ${MLIR_INCLUDE_DIRS}
+    )
+
+    target_link_libraries(mlir_sycl_runtime PRIVATE LevelZero::LevelZero SyclRuntime::SyclRuntime)
+
+    set_property(TARGET mlir_sycl_runtime APPEND PROPERTY BUILD_RPATH "${LevelZero_LIBRARIES_DIR}" "${SyclRuntime_LIBRARIES_DIR}")
   endif()
 endif()

@@ -229,9 +229,9 @@ llvm.func @masked_gather_intr_wrong_type(%ptrs : vector<7xf32>, %mask : vector<7
 
 // -----
 
-llvm.func @masked_scatter_intr_wrong_type(%vec : f32, %ptrs : !llvm.vec<7xptr<f32>>, %mask : vector<7xi1>) {
+llvm.func @masked_scatter_intr_wrong_type(%vec : f32, %ptrs : !llvm.vec<7xptr>, %mask : vector<7xi1>) {
   // expected-error @below{{op operand #0 must be LLVM dialect-compatible vector type, but got 'f32'}}
-  llvm.intr.masked.scatter %vec, %ptrs, %mask { alignment = 1: i32} : f32, vector<7xi1> into !llvm.vec<7xptr<f32>>
+  llvm.intr.masked.scatter %vec, %ptrs, %mask { alignment = 1: i32} : f32, vector<7xi1> into !llvm.vec<7xptr>
   llvm.return
 }
 
@@ -241,4 +241,15 @@ llvm.func @stepvector_intr_wrong_type() -> vector<7xf32> {
   // expected-error @below{{op result #0 must be LLVM dialect-compatible vector of signless integer, but got 'vector<7xf32>'}}
   %0 = llvm.intr.experimental.stepvector : vector<7xf32>
   llvm.return %0 : vector<7xf32>
+}
+
+// -----
+
+llvm.comdat @__llvm_comdat {
+  llvm.comdat_selector @foo any
+}
+
+llvm.comdat @__llvm_comdat_1 {
+  // expected-error @below{{comdat selection symbols must be unique even in different comdat regions}}
+  llvm.comdat_selector @foo any
 }

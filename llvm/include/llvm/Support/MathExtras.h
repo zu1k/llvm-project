@@ -60,34 +60,6 @@ constexpr float ef          = 2.71828183F, // (0x1.5bf0a8P+1) https://oeis.org/A
                 phif        = 1.61803399F; // (0x1.9e377aP+0) https://oeis.org/A001622
 } // namespace numbers
 
-/// Count number of 0's from the least significant bit to the most
-///   stopping at the first 1.
-///
-/// Only unsigned integral types are allowed.
-///
-/// Returns std::numeric_limits<T>::digits on an input of 0.
-template <typename T>
-LLVM_DEPRECATED("Use llvm::countr_zero instead.", "llvm::countr_zero")
-unsigned countTrailingZeros(T Val) {
-  static_assert(std::is_unsigned_v<T>,
-                "Only unsigned integral types are allowed.");
-  return llvm::countr_zero(Val);
-}
-
-/// Count number of 0's from the most significant bit to the least
-///   stopping at the first 1.
-///
-/// Only unsigned integral types are allowed.
-///
-/// Returns std::numeric_limits<T>::digits on an input of 0.
-template <typename T>
-LLVM_DEPRECATED("Use llvm::countl_zero instead.", "llvm::countl_zero")
-unsigned countLeadingZeros(T Val) {
-  static_assert(std::is_unsigned_v<T>,
-                "Only unsigned integral types are allowed.");
-  return llvm::countl_zero(Val);
-}
-
 /// Create a bitmask with the N right-most bits set to 1, and all other
 /// bits set to 0.  Only unsigned types are allowed.
 template <typename T> T maskTrailingOnes(unsigned N) {
@@ -298,47 +270,6 @@ constexpr inline bool isPowerOf2_64(uint64_t Value) {
   return llvm::has_single_bit(Value);
 }
 
-/// Count the number of ones from the most significant bit to the first
-/// zero bit.
-///
-/// Ex. countLeadingOnes(0xFF0FFF00) == 8.
-/// Only unsigned integral types are allowed.
-///
-/// Returns std::numeric_limits<T>::digits on an input of all ones.
-template <typename T>
-LLVM_DEPRECATED("Use llvm::countl_one instead.", "llvm::countl_one")
-unsigned countLeadingOnes(T Value) {
-  static_assert(std::is_unsigned_v<T>,
-                "Only unsigned integral types are allowed.");
-  return llvm::countl_one<T>(Value);
-}
-
-/// Count the number of ones from the least significant bit to the first
-/// zero bit.
-///
-/// Ex. countTrailingOnes(0x00FF00FF) == 8.
-/// Only unsigned integral types are allowed.
-///
-/// Returns std::numeric_limits<T>::digits on an input of all ones.
-template <typename T>
-LLVM_DEPRECATED("Use llvm::countr_one instead.", "llvm::countr_one")
-unsigned countTrailingOnes(T Value) {
-  static_assert(std::is_unsigned_v<T>,
-                "Only unsigned integral types are allowed.");
-  return llvm::countr_one<T>(Value);
-}
-
-/// Count the number of set bits in a value.
-/// Ex. countPopulation(0xF000F000) = 8
-/// Returns 0 if the word is zero.
-template <typename T>
-LLVM_DEPRECATED("Use llvm::popcount instead.", "llvm::popcount")
-inline unsigned countPopulation(T Value) {
-  static_assert(std::is_unsigned_v<T>,
-                "Only unsigned integral types are allowed.");
-  return (unsigned)llvm::popcount(Value);
-}
-
 /// Return true if the argument contains a non-empty sequence of ones with the
 /// remainder zero (32 bit version.) Ex. isShiftedMask_32(0x0000FF00U) == true.
 /// If true, \p MaskIdx will specify the index of the lowest set bit and \p
@@ -451,7 +382,10 @@ inline uint64_t alignTo(uint64_t Value, uint64_t Align) {
 inline uint64_t alignToPowerOf2(uint64_t Value, uint64_t Align) {
   assert(Align != 0 && (Align & (Align - 1)) == 0 &&
          "Align must be a power of 2");
-  return (Value + Align - 1) & -Align;
+  // Replace unary minus to avoid compilation error on Windows:
+  // "unary minus operator applied to unsigned type, result still unsigned"
+  uint64_t negAlign = (~Align) + 1;
+  return (Value + Align - 1) & negAlign;
 }
 
 /// If non-zero \p Skew is specified, the return value will be a minimal integer

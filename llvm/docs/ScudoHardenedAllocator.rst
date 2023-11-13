@@ -115,7 +115,7 @@ Memory reclaiming
 Primary and Secondary allocators have different behaviors with regard to
 reclaiming. While Secondary mapped allocations can be unmapped on deallocation,
 it isn't the case for the Primary, which could lead to a steady growth of the
-RSS of a process. To counteracty this, if the underlying OS allows it, pages
+RSS of a process. To counteract this, if the underlying OS allows it, pages
 that are covered by contiguous free memory blocks in the Primary can be
 released: this generally means they won't count towards the RSS of a process and
 be zero filled on subsequent accesses). This is done in the deallocation path,
@@ -249,6 +249,23 @@ The following "string" options are available:
 | release_to_os_interval_ms       | 5000           | 5000           | The minimum interval (in ms) at which a release |
 |                                 |                |                | can be attempted (a negative value disables     |
 |                                 |                |                | reclaiming).                                    |
++---------------------------------+----------------+----------------+-------------------------------------------------+
+| allocation_ring_buffer_size     | 32768          | n/a            | If stack trace collection is requested, how     |
+|                                 |                |                | many previous allocations to keep in the        |
+|                                 |                |                | allocation ring buffer.                         |
+|                                 |                |                |                                                 |
+|                                 |                |                | This buffer is used to provide allocation and   |
+|                                 |                |                | deallocation stack traces for MTE fault         |
+|                                 |                |                | reports. The larger the buffer, the more        |
+|                                 |                |                | unrelated allocations can happen between        |
+|                                 |                |                | (de)allocation and the fault.                   |
+|                                 |                |                | If your sync-mode MTE faults do not have        |
+|                                 |                |                | (de)allocation stack traces, try increasing the |
+|                                 |                |                | buffer size.                                    |
+|                                 |                |                |                                                 |
+|                                 |                |                | Stack trace collection can be requested using   |
+|                                 |                |                | the scudo_malloc_set_track_allocation_stacks    |
+|                                 |                |                | function.                                       |
 +---------------------------------+----------------+----------------+-------------------------------------------------+
 
 Additional flags can be specified, for example if Scudo if compiled with

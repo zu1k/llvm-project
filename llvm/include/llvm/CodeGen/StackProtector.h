@@ -16,7 +16,6 @@
 #ifndef LLVM_CODEGEN_STACKPROTECTOR_H
 #define LLVM_CODEGEN_STACKPROTECTOR_H
 
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/IR/Instructions.h"
@@ -26,13 +25,10 @@
 namespace llvm {
 
 class BasicBlock;
-class DominatorTree;
 class Function;
-class Instruction;
 class Module;
 class TargetLoweringBase;
 class TargetMachine;
-class Type;
 
 class StackProtector : public FunctionPass {
 private:

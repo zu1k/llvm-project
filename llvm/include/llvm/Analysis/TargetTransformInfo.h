@@ -39,6 +39,7 @@ namespace Intrinsic {
 typedef unsigned ID;
 }
 
+class AllocaInst;
 class AssumptionCache;
 class BlockFrequencyInfo;
 class DominatorTree;
@@ -283,9 +284,19 @@ public:
   };
 
   /// Estimate the cost of a GEP operation when lowered.
+  ///
+  /// \p PointeeType is the source element type of the GEP.
+  /// \p Ptr is the base pointer operand.
+  /// \p Operands is the list of indices following the base pointer.
+  ///
+  /// \p AccessType is a hint as to what type of memory might be accessed by
+  /// users of the GEP. getGEPCost will use it to determine if the GEP can be
+  /// folded into the addressing mode of a load/store. If AccessType is null,
+  /// then the resulting target type based off of PointeeType will be used as an
+  /// approximation.
   InstructionCost
   getGEPCost(Type *PointeeType, const Value *Ptr,
-             ArrayRef<const Value *> Operands,
+             ArrayRef<const Value *> Operands, Type *AccessType = nullptr,
              TargetCostKind CostKind = TCK_SizeAndLatency) const;
 
   /// Describe known properties for a set of pointers.
@@ -337,8 +348,15 @@ public:
   /// individual classes of instructions would be better.
   unsigned getInliningThresholdMultiplier() const;
 
+  unsigned getInliningCostBenefitAnalysisSavingsMultiplier() const;
+  unsigned getInliningCostBenefitAnalysisProfitableMultiplier() const;
+
   /// \returns A value to be added to the inlining threshold.
   unsigned adjustInliningThreshold(const CallBase *CB) const;
+
+  /// \returns The cost of having an Alloca in the caller if not inlined, to be
+  /// added to the threshold
+  unsigned getCallerAllocaCost(const CallBase *CB, const AllocaInst *AI) const;
 
   /// \returns Vector bonus in percent.
   ///
@@ -402,7 +420,11 @@ public:
   /// Branch divergence has a significantly negative impact on GPU performance
   /// when threads in the same wavefront take different paths due to conditional
   /// branches.
-  bool hasBranchDivergence() const;
+  ///
+  /// If \p F is passed, provides a context function. If \p F is known to only
+  /// execute in a single threaded environment, the target may choose to skip
+  /// uniformity analysis and assume all values are uniform.
+  bool hasBranchDivergence(const Function *F = nullptr) const;
 
   /// Returns whether V is a source of divergence.
   ///
@@ -885,6 +907,17 @@ public:
     // be done with two 4-byte compares instead of 4+2+1-byte compares. This
     // requires all loads in LoadSizes to be doable in an unaligned way.
     bool AllowOverlappingLoads = false;
+
+    // Sometimes, the amount of data that needs to be compared is smaller than
+    // the standard register size, but it cannot be loaded with just one load
+    // instruction. For example, if the size of the memory comparison is 6
+    // bytes, we can handle it more efficiently by loading all 6 bytes in a
+    // single block and generating an 8-byte number, instead of generating two
+    // separate blocks with conditional jumps for 4 and 2 byte loads. This
+    // approach simplifies the process and produces the comparison result as
+    // normal. This array lists the allowed sizes of memcmp tails that can be
+    // merged into one block
+    SmallVector<unsigned, 4> AllowedTailExpansions;
   };
   MemCmpExpansionOptions enableMemCmpExpansion(bool OptSize,
                                                bool IsZeroCmp) const;
@@ -1390,8 +1423,7 @@ public:
       TTI::TargetCostKind CostKind = TTI::TCK_RecipThroughput) const;
 
   InstructionCost getMinMaxReductionCost(
-      VectorType *Ty, VectorType *CondTy, bool IsUnsigned,
-      FastMathFlags FMF = FastMathFlags(),
+      Intrinsic::ID IID, VectorType *Ty, FastMathFlags FMF = FastMathFlags(),
       TTI::TargetCostKind CostKind = TTI::TCK_RecipThroughput) const;
 
   /// Calculate the cost of an extended reduction pattern, similar to
@@ -1484,6 +1516,15 @@ public:
   /// purposes.
   bool areInlineCompatible(const Function *Caller,
                            const Function *Callee) const;
+
+  /// Returns a penalty for invoking call \p Call in \p F.
+  /// For example, if a function F calls a function G, which in turn calls
+  /// function H, then getInlineCallPenalty(F, H()) would return the
+  /// penalty of calling H from F, e.g. after inlining G into F.
+  /// \p DefaultCallPenalty is passed to give a default penalty that
+  /// the target can amend or override.
+  unsigned getInlineCallPenalty(const Function *F, const CallBase &Call,
+                                unsigned DefaultCallPenalty) const;
 
   /// \returns True if the caller and callee agree on how \p Types will be
   /// passed to or returned from the callee.
@@ -1671,14 +1712,20 @@ public:
   virtual const DataLayout &getDataLayout() const = 0;
   virtual InstructionCost getGEPCost(Type *PointeeType, const Value *Ptr,
                                      ArrayRef<const Value *> Operands,
+                                     Type *AccessType,
                                      TTI::TargetCostKind CostKind) = 0;
   virtual InstructionCost
   getPointersChainCost(ArrayRef<const Value *> Ptrs, const Value *Base,
                        const TTI::PointersChainInfo &Info, Type *AccessTy,
                        TTI::TargetCostKind CostKind) = 0;
   virtual unsigned getInliningThresholdMultiplier() const = 0;
+  virtual unsigned getInliningCostBenefitAnalysisSavingsMultiplier() const = 0;
+  virtual unsigned
+  getInliningCostBenefitAnalysisProfitableMultiplier() const = 0;
   virtual unsigned adjustInliningThreshold(const CallBase *CB) = 0;
   virtual int getInlinerVectorBonusPercent() const = 0;
+  virtual unsigned getCallerAllocaCost(const CallBase *CB,
+                                       const AllocaInst *AI) const = 0;
   virtual InstructionCost getMemcpyCost(const Instruction *I) = 0;
   virtual uint64_t getMaxMemIntrinsicInlineSizeThreshold() const = 0;
   virtual unsigned
@@ -1689,7 +1736,7 @@ public:
                                              ArrayRef<const Value *> Operands,
                                              TargetCostKind CostKind) = 0;
   virtual BranchProbability getPredictableBranchThreshold() = 0;
-  virtual bool hasBranchDivergence() = 0;
+  virtual bool hasBranchDivergence(const Function *F = nullptr) = 0;
   virtual bool isSourceOfDivergence(const Value *V) = 0;
   virtual bool isAlwaysUniform(const Value *V) = 0;
   virtual bool isValidAddrSpaceCast(unsigned FromAS, unsigned ToAS) const = 0;
@@ -1937,8 +1984,8 @@ public:
                              std::optional<FastMathFlags> FMF,
                              TTI::TargetCostKind CostKind) = 0;
   virtual InstructionCost
-  getMinMaxReductionCost(VectorType *Ty, VectorType *CondTy, bool IsUnsigned,
-                         FastMathFlags FMF, TTI::TargetCostKind CostKind) = 0;
+  getMinMaxReductionCost(Intrinsic::ID IID, VectorType *Ty, FastMathFlags FMF,
+                         TTI::TargetCostKind CostKind) = 0;
   virtual InstructionCost getExtendedReductionCost(
       unsigned Opcode, bool IsUnsigned, Type *ResTy, VectorType *Ty,
       FastMathFlags FMF,
@@ -1974,6 +2021,8 @@ public:
       std::optional<uint32_t> AtomicCpySize) const = 0;
   virtual bool areInlineCompatible(const Function *Caller,
                                    const Function *Callee) const = 0;
+  virtual unsigned getInlineCallPenalty(const Function *F, const CallBase &Call,
+                                        unsigned DefaultCallPenalty) const = 0;
   virtual bool areTypesABICompatible(const Function *Caller,
                                      const Function *Callee,
                                      const ArrayRef<Type *> &Types) const = 0;
@@ -2030,9 +2079,9 @@ public:
 
   InstructionCost
   getGEPCost(Type *PointeeType, const Value *Ptr,
-             ArrayRef<const Value *> Operands,
+             ArrayRef<const Value *> Operands, Type *AccessType,
              TargetTransformInfo::TargetCostKind CostKind) override {
-    return Impl.getGEPCost(PointeeType, Ptr, Operands, CostKind);
+    return Impl.getGEPCost(PointeeType, Ptr, Operands, AccessType, CostKind);
   }
   InstructionCost getPointersChainCost(ArrayRef<const Value *> Ptrs,
                                        const Value *Base,
@@ -2047,8 +2096,18 @@ public:
   unsigned adjustInliningThreshold(const CallBase *CB) override {
     return Impl.adjustInliningThreshold(CB);
   }
+  unsigned getInliningCostBenefitAnalysisSavingsMultiplier() const override {
+    return Impl.getInliningCostBenefitAnalysisSavingsMultiplier();
+  }
+  unsigned getInliningCostBenefitAnalysisProfitableMultiplier() const override {
+    return Impl.getInliningCostBenefitAnalysisProfitableMultiplier();
+  }
   int getInlinerVectorBonusPercent() const override {
     return Impl.getInlinerVectorBonusPercent();
+  }
+  unsigned getCallerAllocaCost(const CallBase *CB,
+                               const AllocaInst *AI) const override {
+    return Impl.getCallerAllocaCost(CB, AI);
   }
   InstructionCost getMemcpyCost(const Instruction *I) override {
     return Impl.getMemcpyCost(I);
@@ -2066,7 +2125,9 @@ public:
   BranchProbability getPredictableBranchThreshold() override {
     return Impl.getPredictableBranchThreshold();
   }
-  bool hasBranchDivergence() override { return Impl.hasBranchDivergence(); }
+  bool hasBranchDivergence(const Function *F = nullptr) override {
+    return Impl.hasBranchDivergence(F);
+  }
   bool isSourceOfDivergence(const Value *V) override {
     return Impl.isSourceOfDivergence(V);
   }
@@ -2556,10 +2617,9 @@ public:
     return Impl.getArithmeticReductionCost(Opcode, Ty, FMF, CostKind);
   }
   InstructionCost
-  getMinMaxReductionCost(VectorType *Ty, VectorType *CondTy, bool IsUnsigned,
-                         FastMathFlags FMF,
+  getMinMaxReductionCost(Intrinsic::ID IID, VectorType *Ty, FastMathFlags FMF,
                          TTI::TargetCostKind CostKind) override {
-    return Impl.getMinMaxReductionCost(Ty, CondTy, IsUnsigned, FMF, CostKind);
+    return Impl.getMinMaxReductionCost(IID, Ty, FMF, CostKind);
   }
   InstructionCost
   getExtendedReductionCost(unsigned Opcode, bool IsUnsigned, Type *ResTy,
@@ -2623,6 +2683,10 @@ public:
   bool areInlineCompatible(const Function *Caller,
                            const Function *Callee) const override {
     return Impl.areInlineCompatible(Caller, Callee);
+  }
+  unsigned getInlineCallPenalty(const Function *F, const CallBase &Call,
+                                unsigned DefaultCallPenalty) const override {
+    return Impl.getInlineCallPenalty(F, Call, DefaultCallPenalty);
   }
   bool areTypesABICompatible(const Function *Caller, const Function *Callee,
                              const ArrayRef<Type *> &Types) const override {

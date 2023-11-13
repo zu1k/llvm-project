@@ -41,7 +41,7 @@ public:
       : BaseT(TM, F.getParent()->getDataLayout()), ST(TM->getSubtargetImpl()),
         TLI(ST->getTargetLowering()) {}
 
-  bool hasBranchDivergence() { return true; }
+  bool hasBranchDivergence(const Function *F = nullptr) { return true; }
 
   bool isSourceOfDivergence(const Value *V);
 
@@ -78,7 +78,7 @@ public:
   // Only <2 x half> should be vectorized, so always return 32 for the vector
   // register size.
   TypeSize getRegisterBitWidth(TargetTransformInfo::RegisterKind K) const {
-    return TypeSize::getFixed(32);
+    return TypeSize::Fixed(32);
   }
   unsigned getMinVectorRegisterBitWidth() const { return 32; }
 

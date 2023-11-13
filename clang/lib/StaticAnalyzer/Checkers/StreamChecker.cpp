@@ -238,17 +238,17 @@ public:
 
 private:
   CallDescriptionMap<FnDescription> FnDescriptions = {
-      {{{"fopen"}}, {nullptr, &StreamChecker::evalFopen, ArgNone}},
+      {{{"fopen"}, 2}, {nullptr, &StreamChecker::evalFopen, ArgNone}},
       {{{"freopen"}, 3},
        {&StreamChecker::preFreopen, &StreamChecker::evalFreopen, 2}},
-      {{{"tmpfile"}}, {nullptr, &StreamChecker::evalFopen, ArgNone}},
+      {{{"tmpfile"}, 0}, {nullptr, &StreamChecker::evalFopen, ArgNone}},
       {{{"fclose"}, 1},
        {&StreamChecker::preDefault, &StreamChecker::evalFclose, 0}},
       {{{"fread"}, 4},
-       {&StreamChecker::preFread,
+       {std::bind(&StreamChecker::preFreadFwrite, _1, _2, _3, _4, true),
         std::bind(&StreamChecker::evalFreadFwrite, _1, _2, _3, _4, true), 3}},
       {{{"fwrite"}, 4},
-       {&StreamChecker::preFwrite,
+       {std::bind(&StreamChecker::preFreadFwrite, _1, _2, _3, _4, false),
         std::bind(&StreamChecker::evalFreadFwrite, _1, _2, _3, _4, false), 3}},
       {{{"fseek"}, 3},
        {&StreamChecker::preFseek, &StreamChecker::evalFseek, 0}},
@@ -285,7 +285,14 @@ private:
         0}},
   };
 
+  /// Expanded value of EOF, empty before initialization.
   mutable std::optional<int> EofVal;
+  /// Expanded value of SEEK_SET, 0 if not found.
+  mutable int SeekSetVal = 0;
+  /// Expanded value of SEEK_CUR, 1 if not found.
+  mutable int SeekCurVal = 1;
+  /// Expanded value of SEEK_END, 2 if not found.
+  mutable int SeekEndVal = 2;
 
   void evalFopen(const FnDescription *Desc, const CallEvent &Call,
                  CheckerContext &C) const;
@@ -298,11 +305,8 @@ private:
   void evalFclose(const FnDescription *Desc, const CallEvent &Call,
                   CheckerContext &C) const;
 
-  void preFread(const FnDescription *Desc, const CallEvent &Call,
-                CheckerContext &C) const;
-
-  void preFwrite(const FnDescription *Desc, const CallEvent &Call,
-                 CheckerContext &C) const;
+  void preFreadFwrite(const FnDescription *Desc, const CallEvent &Call,
+                      CheckerContext &C, bool IsFread) const;
 
   void evalFreadFwrite(const FnDescription *Desc, const CallEvent &Call,
                        CheckerContext &C, bool IsFread) const;
@@ -400,23 +404,14 @@ private:
 
   /// Generate a message for BugReporterVisitor if the stored symbol is
   /// marked as interesting by the actual bug report.
-  // FIXME: Use lambda instead.
-  struct NoteFn {
-    const BugType *BT_ResourceLeak;
-    SymbolRef StreamSym;
-    std::string Message;
-
-    std::string operator()(PathSensitiveBugReport &BR) const {
-      if (BR.isInteresting(StreamSym) && &BR.getBugType() == BT_ResourceLeak)
-        return Message;
-
-      return "";
-    }
-  };
-
   const NoteTag *constructNoteTag(CheckerContext &C, SymbolRef StreamSym,
                                   const std::string &Message) const {
-    return C.getNoteTag(NoteFn{&BT_ResourceLeak, StreamSym, Message});
+    return C.getNoteTag([this, StreamSym,
+                         Message](PathSensitiveBugReport &BR) -> std::string {
+      if (BR.isInteresting(StreamSym) && &BR.getBugType() == &BT_ResourceLeak)
+        return Message;
+      return "";
+    });
   }
 
   const NoteTag *constructSetEofNoteTag(CheckerContext &C,
@@ -432,7 +427,7 @@ private:
     });
   }
 
-  void initEof(CheckerContext &C) const {
+  void initMacroValues(CheckerContext &C) const {
     if (EofVal)
       return;
 
@@ -441,6 +436,15 @@ private:
       EofVal = *OptInt;
     else
       EofVal = -1;
+    if (const std::optional<int> OptInt =
+            tryExpandAsInteger("SEEK_SET", C.getPreprocessor()))
+      SeekSetVal = *OptInt;
+    if (const std::optional<int> OptInt =
+            tryExpandAsInteger("SEEK_END", C.getPreprocessor()))
+      SeekEndVal = *OptInt;
+    if (const std::optional<int> OptInt =
+            tryExpandAsInteger("SEEK_CUR", C.getPreprocessor()))
+      SeekCurVal = *OptInt;
   }
 
   /// Searches for the ExplodedNode where the file descriptor was acquired for
@@ -488,7 +492,7 @@ const ExplodedNode *StreamChecker::getAcquisitionSite(const ExplodedNode *N,
 
 void StreamChecker::checkPreCall(const CallEvent &Call,
                                  CheckerContext &C) const {
-  initEof(C);
+  initMacroValues(C);
 
   const FnDescription *Desc = lookupFn(Call);
   if (!Desc || !Desc->PreFn)
@@ -630,8 +634,9 @@ void StreamChecker::evalFclose(const FnDescription *Desc, const CallEvent &Call,
   C.addTransition(StateFailure);
 }
 
-void StreamChecker::preFread(const FnDescription *Desc, const CallEvent &Call,
-                             CheckerContext &C) const {
+void StreamChecker::preFreadFwrite(const FnDescription *Desc,
+                                   const CallEvent &Call, CheckerContext &C,
+                                   bool IsFread) const {
   ProgramStateRef State = C.getState();
   SVal StreamVal = getStreamArg(Desc, Call);
   State = ensureStreamNonNull(StreamVal, Call.getArgExpr(Desc->StreamArgNo), C,
@@ -644,6 +649,11 @@ void StreamChecker::preFread(const FnDescription *Desc, const CallEvent &Call,
   State = ensureNoFilePositionIndeterminate(StreamVal, C, State);
   if (!State)
     return;
+
+  if (!IsFread) {
+    C.addTransition(State);
+    return;
+  }
 
   SymbolRef Sym = StreamVal.getAsSymbol();
   if (Sym && State->get<StreamMap>(Sym)) {
@@ -653,24 +663,6 @@ void StreamChecker::preFread(const FnDescription *Desc, const CallEvent &Call,
   } else {
     C.addTransition(State);
   }
-}
-
-void StreamChecker::preFwrite(const FnDescription *Desc, const CallEvent &Call,
-                              CheckerContext &C) const {
-  ProgramStateRef State = C.getState();
-  SVal StreamVal = getStreamArg(Desc, Call);
-  State = ensureStreamNonNull(StreamVal, Call.getArgExpr(Desc->StreamArgNo), C,
-                              State);
-  if (!State)
-    return;
-  State = ensureStreamOpened(StreamVal, C, State);
-  if (!State)
-    return;
-  State = ensureNoFilePositionIndeterminate(StreamVal, C, State);
-  if (!State)
-    return;
-
-  C.addTransition(State);
 }
 
 void StreamChecker::evalFreadFwrite(const FnDescription *Desc,
@@ -786,6 +778,11 @@ void StreamChecker::evalFseek(const FnDescription *Desc, const CallEvent &Call,
   if (!State->get<StreamMap>(StreamSym))
     return;
 
+  const llvm::APSInt *PosV =
+      C.getSValBuilder().getKnownValue(State, Call.getArgSVal(1));
+  const llvm::APSInt *WhenceV =
+      C.getSValBuilder().getKnownValue(State, Call.getArgSVal(2));
+
   DefinedSVal RetVal = makeRetVal(C, CE);
 
   // Make expression result.
@@ -804,9 +801,12 @@ void StreamChecker::evalFseek(const FnDescription *Desc, const CallEvent &Call,
   // It is possible that fseek fails but sets none of the error flags.
   // If fseek failed, assume that the file position becomes indeterminate in any
   // case.
+  StreamErrorState NewErrS = ErrorNone | ErrorFError;
+  // Setting the position to start of file never produces EOF error.
+  if (!(PosV && *PosV == 0 && WhenceV && *WhenceV == SeekSetVal))
+    NewErrS = NewErrS | ErrorFEof;
   StateFailed = StateFailed->set<StreamMap>(
-      StreamSym,
-      StreamState::getOpened(Desc, ErrorNone | ErrorFEof | ErrorFError, true));
+      StreamSym, StreamState::getOpened(Desc, NewErrS, true));
 
   C.addTransition(StateNotFailed);
   C.addTransition(StateFailed, constructSetEofNoteTag(C, StreamSym));
@@ -1037,7 +1037,7 @@ StreamChecker::ensureStreamNonNull(SVal StreamVal, const Expr *StreamE,
   ConstraintManager &CM = C.getConstraintManager();
 
   ProgramStateRef StateNotNull, StateNull;
-  std::tie(StateNotNull, StateNull) = CM.assumeDual(C.getState(), *Stream);
+  std::tie(StateNotNull, StateNull) = CM.assumeDual(State, *Stream);
 
   if (!StateNotNull && StateNull) {
     if (ExplodedNode *N = C.generateErrorNode(StateNull)) {
@@ -1093,7 +1093,6 @@ ProgramStateRef StreamChecker::ensureStreamOpened(SVal StreamVal,
           N));
       return nullptr;
     }
-    return State;
   }
 
   return State;
@@ -1153,7 +1152,7 @@ StreamChecker::ensureFseekWhenceCorrect(SVal WhenceVal, CheckerContext &C,
     return State;
 
   int64_t X = CI->getValue().getSExtValue();
-  if (X >= 0 && X <= 2)
+  if (X == SeekSetVal || X == SeekCurVal || X == SeekEndVal)
     return State;
 
   if (ExplodedNode *N = C.generateNonFatalErrorNode(State)) {
@@ -1204,10 +1203,12 @@ StreamChecker::reportLeaks(const SmallVector<SymbolRef, 2> &LeakedSyms,
     // FIXME: Add a checker option to turn this uniqueing feature off.
     const ExplodedNode *StreamOpenNode = getAcquisitionSite(Err, LeakSym, C);
     assert(StreamOpenNode && "Could not find place of stream opening.");
-    PathDiagnosticLocation LocUsedForUniqueing =
-        PathDiagnosticLocation::createBegin(
-            StreamOpenNode->getStmtForDiagnostics(), C.getSourceManager(),
-            StreamOpenNode->getLocationContext());
+
+    PathDiagnosticLocation LocUsedForUniqueing;
+    if (const Stmt *StreamStmt = StreamOpenNode->getStmtForDiagnostics())
+      LocUsedForUniqueing = PathDiagnosticLocation::createBegin(
+          StreamStmt, C.getSourceManager(),
+          StreamOpenNode->getLocationContext());
 
     std::unique_ptr<PathSensitiveBugReport> R =
         std::make_unique<PathSensitiveBugReport>(

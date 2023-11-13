@@ -1987,8 +1987,9 @@ template <class ELFT> void ELFWriter<ELFT>::writeEhdr() {
   Ehdr.e_ident[EI_MAG2] = 'L';
   Ehdr.e_ident[EI_MAG3] = 'F';
   Ehdr.e_ident[EI_CLASS] = ELFT::Is64Bits ? ELFCLASS64 : ELFCLASS32;
-  Ehdr.e_ident[EI_DATA] =
-      ELFT::TargetEndianness == support::big ? ELFDATA2MSB : ELFDATA2LSB;
+  Ehdr.e_ident[EI_DATA] = ELFT::TargetEndianness == llvm::endianness::big
+                              ? ELFDATA2MSB
+                              : ELFDATA2LSB;
   Ehdr.e_ident[EI_VERSION] = EV_CURRENT;
   Ehdr.e_ident[EI_OSABI] = Obj.OSABI;
   Ehdr.e_ident[EI_ABIVERSION] = Obj.ABIVersion;
@@ -2089,7 +2090,7 @@ template <class ELFT> void ELFWriter<ELFT>::writeSegmentData() {
                 Size);
   }
 
-  for (auto it : Obj.getUpdatedSections()) {
+  for (const auto &it : Obj.getUpdatedSections()) {
     SectionBase *Sec = it.first;
     ArrayRef<uint8_t> Data = it.second;
 
@@ -2652,12 +2653,9 @@ Error BinaryWriter::finalize() {
   // MinAddr will be skipped.
   uint64_t MinAddr = UINT64_MAX;
   for (SectionBase &Sec : Obj.allocSections()) {
-    // If Sec's type is changed from SHT_NOBITS due to --set-section-flags,
-    // Offset may not be aligned. Align it to max(Align, 1).
     if (Sec.ParentSegment != nullptr)
-      Sec.Addr = alignTo(Sec.Offset - Sec.ParentSegment->Offset +
-                             Sec.ParentSegment->PAddr,
-                         std::max(Sec.Align, uint64_t(1)));
+      Sec.Addr =
+          Sec.Offset - Sec.ParentSegment->Offset + Sec.ParentSegment->PAddr;
     if (Sec.Type != SHT_NOBITS && Sec.Size > 0)
       MinAddr = std::min(MinAddr, Sec.Addr);
   }
@@ -2698,11 +2696,11 @@ uint64_t IHexWriter::writeEntryPointRecord(uint8_t *Buf) {
   if (Obj.Entry <= 0xFFFFFU) {
     Data[0] = ((Obj.Entry & 0xF0000U) >> 12) & 0xFF;
     support::endian::write(&Data[2], static_cast<uint16_t>(Obj.Entry),
-                           support::big);
+                           llvm::endianness::big);
     HexData = IHexRecord::getLine(IHexRecord::StartAddr80x86, 0, Data);
   } else {
     support::endian::write(Data, static_cast<uint32_t>(Obj.Entry),
-                           support::big);
+                           llvm::endianness::big);
     HexData = IHexRecord::getLine(IHexRecord::StartAddr, 0, Data);
   }
   memcpy(Buf, HexData.data(), HexData.size());

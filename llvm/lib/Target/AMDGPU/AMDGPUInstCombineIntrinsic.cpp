@@ -385,17 +385,20 @@ static APInt trimTrailingZerosInVector(InstCombiner &IC, Value *UseV,
   APInt DemandedElts = APInt::getAllOnes(VWidth);
 
   for (int i = VWidth - 1; i > 0; --i) {
-    APInt DemandOneElt = APInt::getOneBitSet(VWidth, i);
-    KnownFPClass KnownFPClass =
-        computeKnownFPClass(UseV, DemandOneElt, IC.getDataLayout(),
-                            /*InterestedClasses=*/fcAllFlags,
-                            /*Depth=*/0, &IC.getTargetLibraryInfo(),
-                            &IC.getAssumptionCache(), I,
-                            &IC.getDominatorTree());
-    if (KnownFPClass.KnownFPClasses != fcPosZero)
+    auto *Elt = findScalarElement(UseV, i);
+    if (!Elt)
       break;
+
+    if (auto *ConstElt = dyn_cast<Constant>(Elt)) {
+      if (!ConstElt->isNullValue() && !isa<UndefValue>(Elt))
+        break;
+    } else {
+      break;
+    }
+
     DemandedElts.clearBit(i);
   }
+
   return DemandedElts;
 }
 
@@ -404,6 +407,13 @@ static Value *simplifyAMDGCNMemoryIntrinsicDemanded(InstCombiner &IC,
                                                     APInt DemandedElts,
                                                     int DMaskIdx = -1,
                                                     bool IsLoad = true);
+
+/// Return true if it's legal to contract llvm.amdgcn.rcp(llvm.sqrt)
+static bool canContractSqrtToRsq(const FPMathOperator *SqrtOp) {
+  return (SqrtOp->getType()->isFloatTy() &&
+          (SqrtOp->hasApproxFunc() || SqrtOp->getFPAccuracy() >= 1.0f)) ||
+         SqrtOp->getType()->isHalfTy();
+}
 
 std::optional<Instruction *>
 GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
@@ -434,6 +444,37 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
       return IC.replaceInstUsesWith(II, ConstantFP::get(II.getContext(), Val));
     }
 
+    FastMathFlags FMF = cast<FPMathOperator>(II).getFastMathFlags();
+    if (!FMF.allowContract())
+      break;
+    auto *SrcCI = dyn_cast<IntrinsicInst>(Src);
+    if (!SrcCI)
+      break;
+
+    auto IID = SrcCI->getIntrinsicID();
+    // llvm.amdgcn.rcp(llvm.amdgcn.sqrt(x)) -> llvm.amdgcn.rsq(x) if contractable
+    //
+    // llvm.amdgcn.rcp(llvm.sqrt(x)) -> llvm.amdgcn.rsq(x) if contractable and
+    // relaxed.
+    if (IID == Intrinsic::amdgcn_sqrt || IID == Intrinsic::sqrt) {
+      const FPMathOperator *SqrtOp = cast<FPMathOperator>(SrcCI);
+      FastMathFlags InnerFMF = SqrtOp->getFastMathFlags();
+      if (!InnerFMF.allowContract() || !SrcCI->hasOneUse())
+        break;
+
+      if (IID == Intrinsic::sqrt && !canContractSqrtToRsq(SqrtOp))
+        break;
+
+      Function *NewDecl = Intrinsic::getDeclaration(
+          SrcCI->getModule(), Intrinsic::amdgcn_rsq, {SrcCI->getType()});
+
+      InnerFMF |= FMF;
+      II.setFastMathFlags(InnerFMF);
+
+      II.setCalledFunction(NewDecl);
+      return IC.replaceOperand(II, 0, SrcCI->getArgOperand(0));
+    }
+
     break;
   }
   case Intrinsic::amdgcn_sqrt:
@@ -447,9 +488,20 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
       return IC.replaceInstUsesWith(II, QNaN);
     }
 
+    // f16 amdgcn.sqrt is identical to regular sqrt.
+    if (IID == Intrinsic::amdgcn_sqrt && Src->getType()->isHalfTy()) {
+      Function *NewDecl = Intrinsic::getDeclaration(
+          II.getModule(), Intrinsic::sqrt, {II.getType()});
+      II.setCalledFunction(NewDecl);
+      return &II;
+    }
+
     break;
   }
-  case Intrinsic::amdgcn_log: {
+  case Intrinsic::amdgcn_log:
+  case Intrinsic::amdgcn_exp2: {
+    const bool IsLog = IID == Intrinsic::amdgcn_log;
+    const bool IsExp = IID == Intrinsic::amdgcn_exp2;
     Value *Src = II.getArgOperand(0);
     Type *Ty = II.getType();
 
@@ -460,8 +512,16 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
       return IC.replaceInstUsesWith(II, ConstantFP::getNaN(Ty));
 
     if (ConstantFP *C = dyn_cast<ConstantFP>(Src)) {
-      if (C->isInfinity() && !C->isNegative())
-        return IC.replaceInstUsesWith(II, C);
+      if (C->isInfinity()) {
+        // exp2(+inf) -> +inf
+        // log2(+inf) -> +inf
+        if (!C->isNegative())
+          return IC.replaceInstUsesWith(II, C);
+
+        // exp2(-inf) -> 0
+        if (IsExp && C->isNegative())
+          return IC.replaceInstUsesWith(II, ConstantFP::getZero(Ty));
+      }
 
       if (II.isStrictFP())
         break;
@@ -472,10 +532,13 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
       }
 
       // f32 instruction doesn't handle denormals, f16 does.
-      if (C->isZero() || (C->getValue().isDenormal() && Ty->isFloatTy()))
-        return IC.replaceInstUsesWith(II, ConstantFP::getInfinity(Ty, true));
+      if (C->isZero() || (C->getValue().isDenormal() && Ty->isFloatTy())) {
+        Constant *FoldedValue = IsLog ? ConstantFP::getInfinity(Ty, true)
+                                      : ConstantFP::get(Ty, 1.0);
+        return IC.replaceInstUsesWith(II, FoldedValue);
+      }
 
-      if (C->isNegative())
+      if (IsLog && C->isNegative())
         return IC.replaceInstUsesWith(II, ConstantFP::getNaN(Ty));
 
       // TODO: Full constant folding matching hardware behavior.
@@ -767,7 +830,7 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
         Constant *CCmp = ConstantExpr::getCompare(CCVal, CSrc0, CSrc1);
         if (CCmp->isNullValue()) {
           return IC.replaceInstUsesWith(
-              II, ConstantExpr::getSExt(CCmp, II.getType()));
+              II, IC.Builder.CreateSExt(CCmp, II.getType()));
         }
 
         // The result of V_ICMP/V_FCMP assembly instructions (which this
@@ -885,30 +948,17 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
 
     break;
   }
+  case Intrinsic::amdgcn_mbcnt_hi: {
+    // exec_hi is all 0, so this is just a copy.
+    if (ST->isWave32())
+      return IC.replaceInstUsesWith(II, II.getArgOperand(1));
+    break;
+  }
   case Intrinsic::amdgcn_ballot: {
     if (auto *Src = dyn_cast<ConstantInt>(II.getArgOperand(0))) {
       if (Src->isZero()) {
         // amdgcn.ballot(i1 0) is zero.
         return IC.replaceInstUsesWith(II, Constant::getNullValue(II.getType()));
-      }
-
-      if (Src->isOne()) {
-        // amdgcn.ballot(i1 1) is exec.
-        const char *RegName = "exec";
-        if (II.getType()->isIntegerTy(32))
-          RegName = "exec_lo";
-        else if (!II.getType()->isIntegerTy(64))
-          break;
-
-        Function *NewF = Intrinsic::getDeclaration(
-            II.getModule(), Intrinsic::read_register, II.getType());
-        Metadata *MDArgs[] = {MDString::get(II.getContext(), RegName)};
-        MDNode *MD = MDNode::get(II.getContext(), MDArgs);
-        Value *Args[] = {MetadataAsValue::get(II.getContext(), MD)};
-        CallInst *NewCall = IC.Builder.CreateCall(NewF, Args);
-        NewCall->addFnAttr(Attribute::Convergent);
-        NewCall->takeName(&II);
-        return IC.replaceInstUsesWith(II, NewCall);
       }
     }
     break;
@@ -994,50 +1044,6 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
                          PatternMatch::m_Specific(II.getArgOperand(1))))) {
         return IC.replaceInstUsesWith(II, Src);
       }
-    }
-
-    break;
-  }
-  case Intrinsic::amdgcn_ldexp: {
-    // FIXME: This doesn't introduce new instructions and belongs in
-    // InstructionSimplify.
-    Type *Ty = II.getType();
-    Value *Op0 = II.getArgOperand(0);
-    Value *Op1 = II.getArgOperand(1);
-
-    // Folding undef to qnan is safe regardless of the FP mode.
-    if (isa<UndefValue>(Op0)) {
-      auto *QNaN = ConstantFP::get(Ty, APFloat::getQNaN(Ty->getFltSemantics()));
-      return IC.replaceInstUsesWith(II, QNaN);
-    }
-
-    const APFloat *C = nullptr;
-    match(Op0, PatternMatch::m_APFloat(C));
-
-    // FIXME: Should flush denorms depending on FP mode, but that's ignored
-    // everywhere else.
-    //
-    // These cases should be safe, even with strictfp.
-    // ldexp(0.0, x) -> 0.0
-    // ldexp(-0.0, x) -> -0.0
-    // ldexp(inf, x) -> inf
-    // ldexp(-inf, x) -> -inf
-    if (C && (C->isZero() || C->isInfinity())) {
-      return IC.replaceInstUsesWith(II, Op0);
-    }
-
-    // With strictfp, be more careful about possibly needing to flush denormals
-    // or not, and snan behavior depends on ieee_mode.
-    if (II.isStrictFP())
-      break;
-
-    if (C && C->isNaN())
-      return IC.replaceInstUsesWith(II, ConstantFP::get(Ty, C->makeQuiet()));
-
-    // ldexp(x, 0) -> x
-    // ldexp(x, undef) -> x
-    if (isa<UndefValue>(Op1) || match(Op1, PatternMatch::m_ZeroInt())) {
-      return IC.replaceInstUsesWith(II, Op0);
     }
 
     break;

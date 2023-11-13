@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/RegisterBankInfo.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/iterator_range.h"
@@ -60,7 +61,8 @@ RegisterBankInfo::RegisterBankInfo(const RegisterBank **RegBanks,
 #ifndef NDEBUG
   for (unsigned Idx = 0, End = getNumRegBanks(); Idx != End; ++Idx) {
     assert(RegBanks[Idx] != nullptr && "Invalid RegisterBank");
-    assert(RegBanks[Idx]->isValid() && "RegisterBank should be valid");
+    assert(RegBanks[Idx]->getID() == Idx &&
+           "RegisterBank ID should match index");
   }
 #endif // NDEBUG
 }

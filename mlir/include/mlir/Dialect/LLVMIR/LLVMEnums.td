@@ -160,8 +160,6 @@ def CConvFast : LLVM_EnumAttrCase<"Fast", "fastcc", "Fast", 8>;
 def CConvCold : LLVM_EnumAttrCase<"Cold", "coldcc", "Cold", 9>;
 def CConvGHC : LLVM_EnumAttrCase<"GHC", "cc_10", "GHC", 10>;
 def CConvHiPE : LLVM_EnumAttrCase<"HiPE", "cc_11", "HiPE", 11>;
-def CConvWebKitJS : LLVM_EnumAttrCase<"WebKit_JS", "webkit_jscc",
-                                      "WebKit_JS", 12>;
 def CConvAnyReg : LLVM_EnumAttrCase<"AnyReg", "anyregcc", "AnyReg", 13>;
 def CConvPreserveMost : LLVM_EnumAttrCase<"PreserveMost", "preserve_mostcc",
                                           "PreserveMost", 14>;
@@ -254,7 +252,7 @@ def CConvEnum : LLVM_CEnumAttr<
     "CConv",
     "::llvm::CallingConv",
     "Calling Conventions",
-    [CConvC, CConvFast, CConvCold, CConvGHC, CConvHiPE, CConvWebKitJS,
+    [CConvC, CConvFast, CConvCold, CConvGHC, CConvHiPE,
      CConvAnyReg, CConvPreserveMost, CConvPreserveAll, CConvSwift,
      CConvCXXFastTLS, CConvTail, CConvCFGuard_Check, CConvSwiftTail,
      CConvX86_StdCall, CConvX86_FastCall, CConvARM_APCS,
@@ -587,6 +585,31 @@ def Linkage : DialectAttr<
   let convertFromStorage = "$_self.getLinkage()";
   let constBuilderCall =
           "::mlir::LLVM::LinkageAttr::get($_builder.getContext(), $0)";
+}
+
+
+//===----------------------------------------------------------------------===//
+// Comdat
+//===----------------------------------------------------------------------===//
+
+def ComdatAny
+    : LLVM_EnumAttrCase<"Any", "any", "Any", 0>;
+def ComdatExactMatch
+    : LLVM_EnumAttrCase<"ExactMatch", "exactmatch", "ExactMatch", 1>;
+def ComdatLargest
+    : LLVM_EnumAttrCase<"Largest", "largest", "Largest", 2>;
+def ComdatNoDeduplicate
+    : LLVM_EnumAttrCase<"NoDeduplicate", "nodeduplicate", "NoDeduplicate", 3>;
+def ComdatSameSize
+    : LLVM_EnumAttrCase<"SameSize", "samesize", "SameSize", 4>;
+
+def Comdat : LLVM_EnumAttr<
+  "Comdat",
+  "::llvm::Comdat::SelectionKind",
+  "LLVM Comdat Types",
+  [ComdatAny, ComdatExactMatch, ComdatLargest,
+   ComdatNoDeduplicate, ComdatSameSize]> {
+  let cppNamespace = "::mlir::LLVM::comdat";
 }
 
 //===----------------------------------------------------------------------===//
